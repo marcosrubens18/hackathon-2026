@@ -16,6 +16,27 @@
     separated: "Separado · pronto para etiqueta",
     shipped: "Saiu para entrega",
   };
+  // Purchase order (pedido de compra a fornecedor) status labels
+  const purchaseOrderStatus = {
+    suggested: "Sugerido pela previsão",
+    sent: "Enviado ao fornecedor",
+    received: "Recebido · estoque reposto",
+  };
+  const brl = (n) =>
+    new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
+      n,
+    );
+  // Gera uma sequência de dígitos pseudoaleatória e determinística (não é uma chave fiscal real)
+  function pseudoDigits(seed, length) {
+    let x = 0;
+    for (const ch of String(seed)) x = (x * 31 + ch.charCodeAt(0)) % 1e9;
+    let out = "";
+    for (let i = 0; i < length; i++) {
+      x = (x * 1103515245 + 12345) % 1000000007;
+      out += Math.abs(x) % 10;
+    }
+    return out;
+  }
   // Initial demonstration data
   function seed() {
     const items = [
@@ -110,17 +131,42 @@
         "box",
       ],
     ];
+    // Fornecedor preferencial por categoria, usado na reposição automática
+    const supplierByCategory = {
+      Calçados: "sp2",
+      Vestuário: "sp2",
+      Eletrônicos: "sp1",
+      Informática: "sp1",
+      Casa: "sp3",
+      Acessórios: "sp3",
+    };
+    // Fração do preço que representa o custo de aquisição, por categoria — categorias
+    // diferentes têm margens diferentes, como em um varejo real.
+    const costRatioByCategory = {
+      Calçados: 0.58,
+      Eletrônicos: 0.62,
+      Informática: 0.6,
+      Casa: 0.5,
+      Acessórios: 0.45,
+      Vestuário: 0.4,
+    };
     const products = items.map((p, i) => ({
       id: "p" + i,
       name: p[0],
       sku: p[1],
       price: p[2],
+      // Custo de aquisição estimado (usado no cálculo de margem/financeiro)
+      cost: Math.round(p[2] * (costRatioByCategory[p[5]] ?? 0.6) * 100) / 100,
       stock: p[3],
+      // Estoque mínimo recomendado: abaixo disso, a previsão de ruptura considera o produto crítico
+      minStock: 20,
       brand: p[4],
       category: p[5],
       icon: p[6],
       // Código de barras (EAN-13 demonstrativo) usado pelo leitor IoT
       barcode: "789123450" + String(i + 1).padStart(4, "0"),
+      // Fornecedor vinculado, usado na geração automática de pedidos de compra
+      supplierId: supplierByCategory[p[5]] || "sp1",
       description:
         i === 0
           ? "Tênis masculino para corrida. Conforto e leveza para acompanhar seu ritmo."
@@ -183,8 +229,103 @@
           active: true,
         },
       ],
+      // Fornecedores cadastrados, usados na reposição automática de estoque
+      suppliers: [
+        {
+          id: "sp1",
+          name: "Distribuidora Alfa Eletrônicos",
+          cnpj: "22.333.444/0001-55",
+          contact: "compras@alfaeletronicos.com.br",
+          leadTimeDays: 5,
+        },
+        {
+          id: "sp2",
+          name: "Nike do Brasil Comércio",
+          cnpj: "33.444.555/0001-66",
+          contact: "vendas@nikebr.com.br",
+          leadTimeDays: 7,
+        },
+        {
+          id: "sp3",
+          name: "Import Acessórios Ltda",
+          cnpj: "44.555.666/0001-77",
+          contact: "pedidos@importacessorios.com.br",
+          leadTimeDays: 4,
+        },
+      ],
+      // Pedidos de compra a fornecedores (reposição automática de estoque)
+      purchaseOrders: [
+        {
+          id: "PO-3001",
+          supplierId: "sp1",
+          items: [
+            {
+              productId: "p8",
+              sku: "CX-MINI-009",
+              name: "Caixa de Som Mini",
+              qty: 40,
+            },
+          ],
+          status: "sent",
+          createdAt: "Ontem, 16:40",
+        },
+      ],
+      // Divergências entre estoque do sistema e contagem física (leitor IoT)
+      inventoryChecks: [],
       // Registro de leituras do leitor IoT (entrada, saída e separação)
       scanLog: [],
+      // Notas fiscais simuladas (sem validade fiscal real)
+      invoices: [],
+      // Etiquetas de envio simuladas
+      labels: [],
+      // Despesas operacionais simuladas (rateio diário, comparável à receita "de hoje")
+      expenses: [
+        {
+          id: "DESP-1",
+          category: "Aluguel",
+          description: "Aluguel da Loja Tatuapé (rateio diário)",
+          amount: 140,
+          date: "Hoje",
+        },
+        {
+          id: "DESP-2",
+          category: "Marketing",
+          description: "Campanha patrocinada no Mercado Livre",
+          amount: 85,
+          date: "Hoje",
+        },
+        {
+          id: "DESP-3",
+          category: "Frete",
+          description: "Frete de reposição de estoque",
+          amount: 62,
+          date: "Hoje",
+        },
+        {
+          id: "DESP-4",
+          category: "Salários",
+          description: "Equipe de operação (rateio diário)",
+          amount: 310,
+          date: "Hoje",
+        },
+      ],
+      // Notificações da operação (sininho do dashboard)
+      notifications: [
+        {
+          id: "NT-seed-1",
+          type: "separacao",
+          text: "Nova venda no Mercado Livre: pedido SEP-2201 aguardando separação",
+          time: "Há 12 minutos",
+          read: false,
+        },
+        {
+          id: "NT-seed-2",
+          type: "estoque",
+          text: "Caixa de Som Mini está abaixo do estoque mínimo",
+          time: "Há 30 minutos",
+          read: false,
+        },
+      ],
       // Pedidos de marketplace aguardando separação/expedição no estoque físico
       fulfillments: [
         {
@@ -244,9 +385,57 @@
       pendingSeparations: s.fulfillments.filter(
         (f) => f.status === "pending" || f.status === "separating",
       ).length,
+      unreadNotifications: s.notifications.filter((n) => !n.read).length,
+      openPurchaseOrders: s.purchaseOrders.filter(
+        (po) => po.status !== "received",
+      ).length,
+      openInventoryChecks: s.inventoryChecks.filter((c) => c.status === "open")
+        .length,
     };
   }
+  // Previsão de ruptura: velocidade de venda e dias restantes até esgotar, por produto
+  function forecast(s) {
+    return s.products.map((p) => {
+      const sold = s.orders
+        .filter((o) => o.productId === p.id)
+        .reduce((a, o) => a + o.quantity, 0);
+      // Demonstração: os pedidos são todos "de hoje", então as unidades vendidas
+      // hoje representam a velocidade diária considerada na previsão.
+      const dailySales = sold;
+      const daysToStockout =
+        dailySales > 0 ? Math.round((p.stock / dailySales) * 10) / 10 : null;
+      const min = p.minStock ?? 20;
+      const risk =
+        p.stock <= min
+          ? "critico"
+          : daysToStockout !== null && daysToStockout <= 3
+            ? "atencao"
+            : "ok";
+      return {
+        productId: p.id,
+        name: p.name,
+        stock: p.stock,
+        minStock: min,
+        dailySales,
+        daysToStockout,
+        risk,
+      };
+    });
+  }
   // State mutations used by the demonstration
+  function pushNotification(s, type, text) {
+    s.notifications.unshift({
+      id: "NT-" + (s.notifications.length + 1) + "-" + Date.now(),
+      type,
+      text,
+      time: "Agora",
+      read: false,
+    });
+    if (s.notifications.length > 30) s.notifications.length = 30;
+  }
+  function markNotificationsRead(s) {
+    s.notifications.forEach((n) => (n.read = true));
+  }
   function sell(s, id) {
     const p = s.products.find((p) => p.id === id);
     if (!p || p.stock < 1) throw Error("Produto sem estoque disponível.");
@@ -265,17 +454,22 @@
       text: "Venda de " + p.name + " • estoque sincronizado: " + p.stock,
       time: "Agora",
     });
+    pushNotification(s, "venda", "Nova venda no Mercado Livre: " + p.name);
     return o;
   }
   function publish(s, draft, selected, ads) {
     if (!selected.length) throw Error("Selecione pelo menos um canal.");
     if (s.products.some((p) => p.sku.toLowerCase() === draft.sku.toLowerCase()))
       throw Error("Este SKU já existe no catálogo. Use outro SKU.");
+    const price = Number(draft.price);
     const p = {
       ...draft,
       id: "p" + Date.now(),
-      price: Number(draft.price),
+      price,
       stock: Number(draft.stock),
+      cost: draft.cost ? Number(draft.cost) : Math.round(price * 0.6 * 100) / 100,
+      minStock: draft.minStock ? Number(draft.minStock) : 20,
+      supplierId: draft.supplierId || null,
       barcode: draft.barcode || "",
       channels: [...selected],
       icon: "box",
@@ -303,7 +497,39 @@
     if (!p) throw Error("Código não reconhecido no catálogo.");
     return p;
   }
-  // Leitura de SAÍDA na loja física: bipar = venda imediata e baixa de estoque
+  // Gera uma nota fiscal simulada (sem validade fiscal real) para uma venda ou despacho
+  function generateInvoice(s, items, context) {
+    const total =
+      Math.round(items.reduce((a, it) => a + it.price * it.qty, 0) * 100) /
+      100;
+    const inv = {
+      id: "NF-" + (1000 + s.invoices.length + 1),
+      key: pseudoDigits("NF" + s.invoices.length + "-" + Date.now(), 44),
+      items,
+      total,
+      context,
+      date: "Agora",
+    };
+    s.invoices.unshift(inv);
+    return inv;
+  }
+  // Gera uma etiqueta de envio simulada para um pedido despachado
+  function generateLabel(s, f) {
+    const channel = channels.find((c) => c.id === f.channel);
+    const qty = f.items.reduce((a, it) => a + it.qty, 0);
+    const lbl = {
+      id: "ETQ-" + (5000 + s.labels.length + 1),
+      trackingCode: "WT" + pseudoDigits("ETQ-" + f.id, 10),
+      fulfillmentId: f.id,
+      channel: f.channel,
+      recipient: (channel ? channel.name : "Cliente") + " · Cliente da demonstração",
+      weight: Math.max(0.2, Math.round(qty * 0.35 * 10) / 10),
+      date: "Agora",
+    };
+    s.labels.unshift(lbl);
+    return lbl;
+  }
+  // Leitura de SAÍDA na loja física: bipar = venda imediata, baixa de estoque e NF simulada
   function scanSale(s, code, storeId) {
     const p = findByCode(s, code);
     if (p.stock < 1) throw Error(p.name + " está sem estoque disponível.");
@@ -320,6 +546,12 @@
     };
     s.orders.push(o);
     s.shareBase.lp = (s.shareBase.lp || 0) + p.price;
+    const invoice = generateInvoice(
+      s,
+      [{ productId: p.id, sku: p.sku, name: p.name, qty: 1, price: p.price }],
+      { channel: "lp", store: store ? store.name : "Loja" },
+    );
+    o.invoiceId = invoice.id;
     s.scanLog.unshift({
       id: "SC-" + (s.scanLog.length + 1),
       type: "saida",
@@ -334,10 +566,18 @@
         p.name +
         (store ? " na " + store.name : "") +
         " • estoque sincronizado: " +
-        p.stock,
+        p.stock +
+        " • NF " +
+        invoice.id +
+        " gerada",
       time: "Agora",
     });
-    return { product: p, order: o };
+    pushNotification(
+      s,
+      "venda",
+      "Venda registrada" + (store ? " na " + store.name : "") + ": " + p.name,
+    );
+    return { product: p, order: o, invoice };
   }
   // Leitura de ENTRADA na loja física: bipar = soma ao estoque (recebimento/reposição)
   function scanReceive(s, code, qty, storeId) {
@@ -405,6 +645,11 @@
       text: "Novo pedido do " + c.name + " aguardando separação (" + f.id + ")",
       time: "Agora",
     });
+    pushNotification(
+      s,
+      "separacao",
+      "Nova venda no " + c.name + ": pedido " + f.id + " aguardando separação",
+    );
     return f;
   }
   // Bipagem de um item durante a separação de um pedido: confere se o código pertence ao pedido
@@ -474,17 +719,42 @@
     });
     return f;
   }
-  // Despacha um pedido já separado
+  // Despacha um pedido já separado: gera NF e etiqueta simuladas
   function dispatchFulfillment(s, fulfillmentId) {
     const f = s.fulfillments.find((f) => f.id === fulfillmentId);
     if (!f) throw Error("Pedido não encontrado.");
     if (f.status !== "separated")
       throw Error("Separe todos os itens do pedido antes de despachar.");
     f.status = "shipped";
+    const items = f.items.map((it) => {
+      const p = s.products.find((p) => p.id === it.productId);
+      return {
+        productId: it.productId,
+        sku: it.sku,
+        name: it.name,
+        qty: it.qty,
+        price: p ? p.price : 0,
+      };
+    });
+    const invoice = generateInvoice(s, items, {
+      channel: f.channel,
+      fulfillmentId: f.id,
+    });
+    const label = generateLabel(s, f);
+    f.invoiceId = invoice.id;
+    f.labelId = label.id;
     s.history.unshift({
-      text: "Pedido " + f.id + " saiu para entrega",
+      text:
+        "Pedido " +
+        f.id +
+        " saiu para entrega — NF " +
+        invoice.id +
+        " e etiqueta " +
+        label.trackingCode +
+        " geradas",
       time: "Agora",
     });
+    pushNotification(s, "despacho", "Pedido " + f.id + " saiu para entrega");
     return f;
   }
   // Cadastra uma nova loja/centro de distribuição (painel de configurações)
@@ -509,6 +779,197 @@
     });
     return store;
   }
+  // Cadastra um novo fornecedor (painel de configurações)
+  function addSupplier(s, draft) {
+    const name = (draft.name || "").trim(),
+      cnpj = (draft.cnpj || "").trim();
+    if (!name || !cnpj) throw Error("Informe nome e CNPJ do fornecedor.");
+    if (s.suppliers.some((sp) => sp.cnpj === cnpj))
+      throw Error("Já existe um fornecedor cadastrado com este CNPJ.");
+    const supplier = {
+      id: "sp" + (s.suppliers.length + 1) + "-" + Date.now(),
+      name,
+      cnpj,
+      contact: (draft.contact || "").trim(),
+      leadTimeDays: Math.max(1, Math.min(60, Math.round(Number(draft.leadTimeDays) || 5))),
+    };
+    s.suppliers.push(supplier);
+    s.history.unshift({
+      text: "Novo fornecedor cadastrado nas configurações: " + supplier.name,
+      time: "Agora",
+    });
+    return supplier;
+  }
+  // Automação: gera pedidos de compra para produtos abaixo do mínimo com fornecedor definido
+  function autoGeneratePurchaseOrders(s) {
+    const openProductIds = new Set(
+      s.purchaseOrders
+        .filter((po) => po.status !== "received")
+        .flatMap((po) => po.items.map((it) => it.productId)),
+    );
+    const created = [];
+    for (const p of s.products) {
+      const min = p.minStock ?? 20;
+      if (p.stock >= min) continue;
+      if (!p.supplierId) continue;
+      if (openProductIds.has(p.id)) continue;
+      const supplier = s.suppliers.find((sp) => sp.id === p.supplierId);
+      if (!supplier) continue;
+      const sold = s.orders
+        .filter((o) => o.productId === p.id)
+        .reduce((a, o) => a + o.quantity, 0);
+      const qty = Math.max(min * 2 - p.stock, sold * supplier.leadTimeDays, 10);
+      const po = {
+        id: "PO-" + (3000 + s.purchaseOrders.length + 1),
+        supplierId: supplier.id,
+        items: [
+          { productId: p.id, sku: p.sku, name: p.name, qty: Math.round(qty) },
+        ],
+        status: "suggested",
+        createdAt: "Agora",
+      };
+      s.purchaseOrders.unshift(po);
+      created.push(po);
+    }
+    if (created.length)
+      s.history.unshift({
+        text:
+          created.length +
+          " pedido(s) de compra gerado(s) automaticamente pela previsão de ruptura",
+        time: "Agora",
+      });
+    return created;
+  }
+  // Envia um pedido de compra sugerido ao fornecedor
+  function sendPurchaseOrder(s, poId) {
+    const po = s.purchaseOrders.find((po) => po.id === poId);
+    if (!po) throw Error("Pedido de compra não encontrado.");
+    if (po.status !== "suggested") throw Error("Este pedido já foi enviado.");
+    po.status = "sent";
+    const supplier = s.suppliers.find((sp) => sp.id === po.supplierId);
+    s.history.unshift({
+      text:
+        "Pedido " +
+        po.id +
+        " enviado para " +
+        (supplier ? supplier.name : "o fornecedor"),
+      time: "Agora",
+    });
+    return po;
+  }
+  // Confirma o recebimento de um pedido de compra: repõe o estoque
+  function receivePurchaseOrder(s, poId) {
+    const po = s.purchaseOrders.find((po) => po.id === poId);
+    if (!po) throw Error("Pedido de compra não encontrado.");
+    if (po.status === "received") throw Error("Este pedido já foi recebido.");
+    for (const it of po.items) {
+      const p = s.products.find((p) => p.id === it.productId);
+      if (p) p.stock += it.qty;
+    }
+    po.status = "received";
+    s.history.unshift({
+      text: "Pedido " + po.id + " recebido. Estoque reposto.",
+      time: "Agora",
+    });
+    pushNotification(
+      s,
+      "compra",
+      "Pedido de compra " + po.id + " recebido: estoque reposto",
+    );
+    return po;
+  }
+  // Simula uma contagem física de estoque (leitor IoT) e registra eventual divergência
+  function simulateInventoryCount(s, productId) {
+    const p = s.products.find((p) => p.id === productId);
+    if (!p) throw Error("Produto não encontrado.");
+    const diff = p.stock % 2 === 0 ? 1 : 2;
+    const counted = Math.max(0, p.stock - diff);
+    const check = {
+      id: "CHK-" + (s.inventoryChecks.length + 1),
+      productId: p.id,
+      name: p.name,
+      systemStock: p.stock,
+      countedStock: counted,
+      status: "open",
+      time: "Agora",
+    };
+    s.inventoryChecks.unshift(check);
+    s.history.unshift({
+      text:
+        "Contagem física de " +
+        p.name +
+        ": sistema " +
+        p.stock +
+        " × contado " +
+        counted,
+      time: "Agora",
+    });
+    return check;
+  }
+  // Corrige o estoque do sistema para o valor contado fisicamente
+  function resolveInventoryCheck(s, checkId) {
+    const c = s.inventoryChecks.find((c) => c.id === checkId);
+    if (!c) throw Error("Contagem não encontrada.");
+    if (c.status !== "open") throw Error("Esta contagem já foi resolvida.");
+    const p = s.products.find((p) => p.id === c.productId);
+    if (p) p.stock = c.countedStock;
+    c.status = "resolved";
+    s.history.unshift({
+      text:
+        "WedTech AI corrigiu o estoque de " +
+        c.name +
+        " para " +
+        c.countedStock +
+        " unidades",
+      time: "Agora",
+    });
+    pushNotification(
+      s,
+      "estoque",
+      "Divergência de estoque corrigida: " + c.name,
+    );
+    return c;
+  }
+  // Indicadores financeiros: receita, custo das vendas, lucro bruto/líquido e margem
+  function financials(s) {
+    const revenue =
+      Math.round(s.orders.reduce((a, o) => a + o.amount, 0) * 100) / 100;
+    const cogs =
+      Math.round(
+        s.orders.reduce((a, o) => {
+          const p = s.products.find((p) => p.id === o.productId);
+          return a + (p ? p.cost * o.quantity : 0);
+        }, 0) * 100,
+      ) / 100;
+    const grossProfit = Math.round((revenue - cogs) * 100) / 100;
+    const grossMargin =
+      revenue > 0 ? Math.round((grossProfit / revenue) * 1000) / 10 : 0;
+    const totalExpenses =
+      Math.round(s.expenses.reduce((a, e) => a + e.amount, 0) * 100) / 100;
+    const netProfit = Math.round((grossProfit - totalExpenses) * 100) / 100;
+    return { revenue, cogs, grossProfit, grossMargin, totalExpenses, netProfit };
+  }
+  // Registra uma nova despesa operacional (painel Financeiro)
+  function addExpense(s, draft) {
+    const category = (draft.category || "").trim(),
+      description = (draft.description || "").trim();
+    const amount = Number(draft.amount);
+    if (!category || !(amount > 0))
+      throw Error("Informe categoria e um valor válido para a despesa.");
+    const expense = {
+      id: "DESP-" + (s.expenses.length + 1) + "-" + Date.now(),
+      category,
+      description,
+      amount: Math.round(amount * 100) / 100,
+      date: (draft.date || "").trim() || "Hoje",
+    };
+    s.expenses.push(expense);
+    s.history.unshift({
+      text: "Nova despesa registrada: " + category + " (" + brl(expense.amount) + ")",
+      time: "Agora",
+    });
+    return expense;
+  }
   // Local WedTech AI response engine
   function answer(s, q) {
     const m = metrics(s),
@@ -518,14 +979,26 @@
       .toLowerCase()
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "");
-    if (/estoque|ruptura/.test(q))
-      return low.length
-        ? "Identifiquei " +
-            low.length +
-            " produtos com estoque baixo:\n\n" +
-            low.map((p) => p.name + " — " + p.stock + " unidades.").join("\n") +
-            "\n\nRecomendo planejar a reposição antes de ampliar os anúncios. O saldo é compartilhado entre os canais."
-        : "Todos os produtos estão acima do limite de 20 unidades.";
+    if (/estoque|ruptura/.test(q)) {
+      const risk = forecast(s).filter((f) => f.risk !== "ok");
+      return risk.length
+        ? "Previsão de ruptura com base no ritmo de vendas de hoje:\n\n" +
+            risk
+              .map(
+                (f) =>
+                  f.name +
+                  " — " +
+                  f.stock +
+                  " unidades" +
+                  (f.daysToStockout !== null
+                    ? " · esgota em ~" + f.daysToStockout + " dia(s)"
+                    : " · abaixo do mínimo (" + f.minStock + ")") +
+                  ".",
+              )
+              .join("\n") +
+            "\n\nRecomendo gerar pedidos de compra para os fornecedores antes de ampliar os anúncios. O saldo é compartilhado entre os canais."
+        : "Todos os produtos estão dentro do estoque mínimo recomendado.";
+    }
     if (/erro|anuncio/.test(q))
       return issues.length
         ? issues
@@ -554,6 +1027,66 @@
               .join("\n") +
             "\n\nAbra o Estoque Inteligente para bipar os itens e liberar o despacho."
         : "Nenhum pedido pendente de separação no momento.";
+    }
+    if (/fornecedor|compra/.test(q)) {
+      const open = s.purchaseOrders.filter((po) => po.status !== "received");
+      return open.length
+        ? "Pedidos de compra em aberto:\n\n" +
+            open
+              .map((po) => {
+                const supplier = s.suppliers.find(
+                  (sp) => sp.id === po.supplierId,
+                );
+                return (
+                  po.id +
+                  " — " +
+                  (supplier ? supplier.name : "fornecedor") +
+                  " — " +
+                  (po.status === "sent"
+                    ? "enviado, aguardando entrega"
+                    : "sugerido, ainda não enviado")
+                );
+              })
+              .join("\n") +
+            "\n\nAbra o Estoque Inteligente para enviar ou confirmar o recebimento."
+        : "Nenhum pedido de compra em aberto. O estoque está coberto pelo mínimo configurado.";
+    }
+    if (/divergenc|contagem/.test(q)) {
+      const open = s.inventoryChecks.filter((c) => c.status === "open");
+      return open.length
+        ? "Divergências de inventário encontradas na última contagem física:\n\n" +
+            open
+              .map(
+                (c) =>
+                  c.name +
+                  " — sistema " +
+                  c.systemStock +
+                  " × contado " +
+                  c.countedStock +
+                  ".",
+              )
+              .join("\n") +
+            "\n\nAbra o Estoque Inteligente para corrigir com um clique."
+        : "Nenhuma divergência de inventário em aberto no momento.";
+    }
+    if (/lucro|despes|financeiro|margem/.test(q)) {
+      const fin = financials(s);
+      return (
+        "Financeiro da operação:\n\nReceita: " +
+        brl(fin.revenue) +
+        "\nCusto das vendas: " +
+        brl(fin.cogs) +
+        "\nLucro bruto: " +
+        brl(fin.grossProfit) +
+        " (" +
+        fin.grossMargin +
+        "%)" +
+        "\nDespesas: " +
+        brl(fin.totalExpenses) +
+        "\nLucro líquido: " +
+        brl(fin.netProfit) +
+        "\n\nAbra o Financeiro para ver o detalhamento."
+      );
     }
     if (/mais|giro|vendendo/.test(q)) {
       const ranked = s.products
@@ -592,10 +1125,7 @@
         "Hoje sua operação registrou " +
         m.orders +
         " pedidos e " +
-        new Intl.NumberFormat("pt-BR", {
-          style: "currency",
-          currency: "BRL",
-        }).format(m.revenue) +
+        brl(m.revenue) +
         " em vendas.\n\nO Mercado Livre continua sendo seu principal canal. Seu catálogo possui " +
         m.products +
         " produtos e " +
@@ -608,19 +1138,25 @@
         issues.length +
         " anúncio(s) que precisam de correção e " +
         m.pendingSeparations +
-        " pedido(s) aguardando separação."
+        " pedido(s) aguardando separação.\n\n" +
+        (m.openPurchaseOrders
+          ? m.openPurchaseOrders +
+            " pedido(s) de compra em andamento com fornecedores."
+          : "Nenhum pedido de compra em aberto no momento.")
       );
-    return "Nesta demonstração, consigo analisar estoque, produtos que precisam de atenção, vendas, erros nos anúncios e pedidos aguardando separação. Escolha uma sugestão ou peça: “Resuma minha operação.”";
+    return "Nesta demonstração, consigo analisar estoque e previsão de ruptura, produtos que precisam de atenção, vendas, erros nos anúncios, pedidos aguardando separação, pedidos de compra a fornecedores, divergências de inventário e o financeiro (lucro e despesas). Escolha uma sugestão ou peça: “Resuma minha operação.”";
   }
   // Public API for the interface and automated tests
   const api = {
     seed,
     metrics,
+    forecast,
     sell,
     publish,
     answer,
     channels,
     fulfillmentStatus,
+    purchaseOrderStatus,
     findByCode,
     scanSale,
     scanReceive,
@@ -629,6 +1165,17 @@
     confirmSeparation,
     dispatchFulfillment,
     addStore,
+    addSupplier,
+    autoGeneratePurchaseOrders,
+    sendPurchaseOrder,
+    receivePurchaseOrder,
+    simulateInventoryCount,
+    resolveInventoryCheck,
+    markNotificationsRead,
+    generateInvoice,
+    generateLabel,
+    financials,
+    addExpense,
   };
   if (typeof module !== "undefined") module.exports = api;
   global.WedTech = api;

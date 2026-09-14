@@ -13,6 +13,9 @@ test("dados iniciais e soma única do estoque", () => {
     connected: 3,
     alerts: 6,
     pendingSeparations: 2,
+    unreadNotifications: 2,
+    openPurchaseOrders: 1,
+    openInventoryChecks: 0,
   });
   assert.equal(s.orders.filter((o) => o.channel === "ml").length, 18);
   assert.equal(s.orders.filter((o) => o.channel === "sh").length, 11);
@@ -90,6 +93,7 @@ test("sete áreas, separação de pedido e etapas de anúncio renderizam sem err
     "one",
     "estoque",
     "marketplaces",
+    "financeiro",
     "ai",
     "config",
   ]) {
@@ -98,6 +102,18 @@ test("sete áreas, separação de pedido e etapas de anúncio renderizam sem err
     assert.ok(!app.innerHTML.includes("undefined"));
   }
   assert.ok(app.innerHTML.includes("Estoque Inteligente"));
+  vm.runInContext("page='financeiro';render()", context);
+  assert.ok(app.innerHTML.includes("Lucro líquido"));
+  vm.runInContext("notifPanelOpen=true;render()", context);
+  assert.ok(app.innerHTML.includes("notif-panel"));
+  assert.ok(!app.innerHTML.includes("undefined"));
+  vm.runInContext(
+    "notifPanelOpen=false;WedTech.scanSale(state,'NK-RV8-001','st1');docModal='invoice:'+state.invoices[0].id;render()",
+    context,
+  );
+  assert.ok(app.innerHTML.includes("NOTA FISCAL"));
+  assert.ok(!app.innerHTML.includes("undefined"));
+  vm.runInContext("docModal=null;render()", context);
   vm.runInContext("modal='p0';render()", context);
   assert.ok(app.innerHTML.includes("18"));
   vm.runInContext("modal=null;fulfillmentModal='SEP-2201';render()", context);
@@ -175,6 +191,106 @@ test("novo pedido entra na fila e cadastro de loja valida nome e CNPJ", () => {
     /CNPJ/,
   );
   assert.throws(() => N.addStore(s, { name: "", cnpj: "" }), /nome e CNPJ/i);
+});
+test("previsão de ruptura identifica produtos em risco", () => {
+  const s = N.seed();
+  const risk = N.forecast(s).filter((f) => f.risk !== "ok");
+  assert.deepEqual(
+    risk.map((f) => f.productId).sort(),
+    ["p0", "p8"],
+  );
+  assert.match(
+    N.answer(s, "Tenho risco de ficar sem estoque?"),
+    /Nike Revolution 8.*esgota em/s,
+  );
+});
+test("pedidos de compra: geração automática, envio e recebimento repõem o estoque", () => {
+  const s = N.seed();
+  const created = N.autoGeneratePurchaseOrders(s);
+  assert.equal(created.length, 1);
+  assert.equal(created[0].items[0].productId, "p0");
+  assert.equal(N.metrics(s).openPurchaseOrders, 2);
+  // gerar de novo não duplica pedido para o mesmo produto
+  assert.equal(N.autoGeneratePurchaseOrders(s).length, 0);
+  const po = created[0];
+  N.sendPurchaseOrder(s, po.id);
+  assert.equal(po.status, "sent");
+  assert.throws(() => N.sendPurchaseOrder(s, po.id), /já foi enviado/);
+  const before = s.products.find((p) => p.id === "p0").stock;
+  N.receivePurchaseOrder(s, po.id);
+  assert.equal(
+    s.products.find((p) => p.id === "p0").stock,
+    before + po.items[0].qty,
+  );
+  assert.equal(po.status, "received");
+  assert.throws(() => N.receivePurchaseOrder(s, po.id), /já foi recebido/);
+  assert.throws(() => N.receivePurchaseOrder(s, "PO-9999"), /não encontrado/);
+});
+test("divergência de inventário: simulação e correção pela WedTech AI", () => {
+  const s = N.seed();
+  const check = N.simulateInventoryCount(s, "p0");
+  assert.equal(check.systemStock, 18);
+  assert.equal(check.countedStock, 17);
+  assert.equal(check.status, "open");
+  assert.equal(N.metrics(s).openInventoryChecks, 1);
+  N.resolveInventoryCheck(s, check.id);
+  assert.equal(check.status, "resolved");
+  assert.equal(s.products.find((p) => p.id === "p0").stock, 17);
+  assert.equal(N.metrics(s).openInventoryChecks, 0);
+  assert.throws(() => N.resolveInventoryCheck(s, check.id), /já foi resolvida/);
+});
+test("cadastro de fornecedor valida nome e CNPJ", () => {
+  const s = N.seed();
+  const supplier = N.addSupplier(s, {
+    name: "Distribuidora Beta",
+    cnpj: "55.666.777/0001-88",
+    contact: "contato@beta.com.br",
+    leadTimeDays: 3,
+  });
+  assert.equal(s.suppliers.length, 4);
+  assert.equal(supplier.leadTimeDays, 3);
+  assert.throws(
+    () => N.addSupplier(s, { name: "Outra", cnpj: "55.666.777/0001-88" }),
+    /CNPJ/,
+  );
+  assert.throws(() => N.addSupplier(s, { name: "", cnpj: "" }), /nome e CNPJ/i);
+});
+test("financeiro: lucro considera custo e despesas, e nova despesa reduz o lucro líquido", () => {
+  const s = N.seed();
+  const fin = N.financials(s);
+  assert.equal(fin.revenue, 4850);
+  assert.equal(fin.grossProfit, 920.84);
+  assert.equal(fin.netProfit, 323.84);
+  assert.ok(fin.netProfit >= 0, "lucro líquido inicial deve ser positivo na demonstração");
+  N.addExpense(s, { category: "Embalagens", description: "Caixas", amount: 45 });
+  assert.equal(N.financials(s).totalExpenses, 642);
+  assert.equal(N.financials(s).netProfit, 278.84);
+  assert.match(N.answer(s, "Qual meu lucro hoje?"), /Lucro líquido/);
+  assert.throws(
+    () => N.addExpense(s, { category: "", amount: 0 }),
+    /categoria e um valor válido/,
+  );
+});
+test("venda e despacho geram NF e etiqueta simuladas, e notificações refletem os eventos", () => {
+  const s = N.seed();
+  assert.equal(N.metrics(s).unreadNotifications, 2);
+  const { order, invoice } = N.scanSale(s, "NK-RV8-001", "st1");
+  assert.equal(order.invoiceId, invoice.id);
+  assert.equal(s.invoices[0].id, invoice.id);
+  assert.equal(s.invoices[0].key.length, 44);
+  assert.equal(N.metrics(s).unreadNotifications, 3);
+  N.markNotificationsRead(s);
+  assert.equal(N.metrics(s).unreadNotifications, 0);
+  const f = s.fulfillments[0];
+  N.scanFulfillmentItem(s, f.id, "MS-G500-003");
+  N.scanFulfillmentItem(s, f.id, "7891234500007");
+  N.confirmSeparation(s, f.id);
+  N.dispatchFulfillment(s, f.id);
+  assert.ok(f.invoiceId);
+  assert.ok(f.labelId);
+  assert.equal(s.labels[0].id, f.labelId);
+  assert.match(s.labels[0].trackingCode, /^WT\d+$/);
+  assert.equal(N.metrics(s).unreadNotifications, 1);
 });
 test("dashboard destaca o WedTech AI e oferece navegação acessível", () => {
   const app = { innerHTML: "" };
