@@ -72,9 +72,14 @@ try {
   state = JSON.parse(localStorage.getItem("wedtech-demo-v1"));
   if (
     !state ||
-    state.version !== 1 ||
+    state.version !== 2 ||
     !Array.isArray(state.products) ||
-    !Array.isArray(state.orders)
+    !Array.isArray(state.orders) ||
+    !Array.isArray(state.stores) ||
+    !Array.isArray(state.suppliers) ||
+    !Array.isArray(state.notifications) ||
+    !Array.isArray(state.purchaseOrders) ||
+    !Array.isArray(state.expenses)
   )
     state = seed();
 } catch {

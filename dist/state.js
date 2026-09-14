@@ -193,7 +193,9 @@
         String((i % 6) * 9).padStart(2, "0"),
     }));
     return {
-      version: 1,
+      // Incrementada sempre que o formato dos dados muda — descarta dados antigos
+      // salvos no navegador (localStorage) em vez de quebrar com campos ausentes.
+      version: 2,
       products,
       orders,
       connected: ["ml", "sh", "tk"],
