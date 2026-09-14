@@ -5,6 +5,7 @@ const {
   seed,
   metrics,
   forecast,
+  businessImpact,
   sell,
   publish,
   answer,
@@ -47,6 +48,29 @@ const operators = [
     name: "João Pedro Lima",
     role: "Vendedor",
     store: "Loja Tatuapé",
+  },
+];
+// Passos do tour guiado, mostrado uma vez após o primeiro login
+const tourSlides = [
+  {
+    title: "Bem-vindo ao WedTech",
+    text: "Central inteligente de e-commerce e marketplaces. Vamos conhecer o essencial em 4 passos rápidos.",
+    icon: "dashboard",
+  },
+  {
+    title: "Dashboard",
+    text: "Vendas, alertas e notificações da sua operação em um só lugar — clique no sino a qualquer momento para ver o histórico.",
+    icon: "dashboard",
+  },
+  {
+    title: "Estoque Inteligente",
+    text: "Bipe vendas com o leitor (texto ou câmera), separe pedidos e deixe a IA prever rupturas, sugerir liquidações e gerar reposição automática.",
+    icon: "estoque",
+  },
+  {
+    title: "Financeiro e WedTech AI",
+    text: "Acompanhe o lucro em tempo real e pergunte qualquer coisa sobre a operação para a WedTech AI — inclusive sobre pedidos de compra e impacto financeiro.",
+    icon: "financeiro",
   },
 ];
 const $ = (s) => document.querySelector(s),
@@ -111,7 +135,18 @@ let page = "dashboard",
   notifPanelOpen = false,
   docModal = null,
   liveMode = false,
-  liveTimer = null;
+  liveTimer = null,
+  loggedIn = false,
+  loginError = "",
+  loginBusy = false,
+  tourStep = null,
+  cameraTarget = null,
+  cameraError = "";
+try {
+  loggedIn = sessionStorage.getItem("wedtech-session") === "1";
+} catch {}
+let cameraStream = null,
+  cameraLoopId = null;
 function blank() {
   return {
     name: "",
@@ -192,6 +227,16 @@ function logo(id) {
 function badge(text, type = "") {
   return '<span class="badge ' + type + '">' + text + "</span>";
 }
+// QR code real (vendorizado, sem serviço externo) para NF e etiquetas simuladas
+function renderQR(data, size) {
+  try {
+    if (typeof WedTechQR === "undefined") return "";
+    const qr = WedTechQR.createQrCode(data, WedTechQR.QRErrorCorrectLevel.M);
+    return WedTechQR.toSVG(qr, size, 2);
+  } catch {
+    return "";
+  }
+}
 function save() {
   try {
     localStorage.setItem("wedtech-demo-v1", JSON.stringify(state));
@@ -208,6 +253,26 @@ function toast(t) {
   toast.timer = setTimeout(() => $("#toast").classList.remove("show"), 4000);
 }
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+// Exporta linhas como CSV e dispara o download local (sem servidor, sem serviço externo)
+function csvEscape(v) {
+  const s = String(v ?? "");
+  return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function downloadCSV(filename, header, rows) {
+  const csv = [header, ...rows]
+    .map((r) => r.map(csvEscape).join(";"))
+    .join("\r\n");
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast("Arquivo " + filename + " baixado.");
+}
 function heading(title, sub, action = "") {
   return (
     '<div class="page-heading"><div><h1>' +
@@ -223,7 +288,21 @@ function go(p) {
   location.hash = p;
 }
 // Application shell
+// Tela de login — protótipo sem autenticação real: qualquer e-mail/senha entra.
+function loginScreen() {
+  return `<div class="login-screen"><div class="login-card"><div class="login-brand"><img src="wedtech-symbol.png" alt="" width="46" height="46"><span class="login-word"><b>Wed</b>Tech</span></div><p class="login-tag">Tecnologia e conexão para o futuro.</p><form id="login-form"><div class="field"><label for="login-email">E-mail</label><input id="login-email" name="email" type="email" placeholder="voce@suaempresa.com.br" autocomplete="username" required></div><div class="field" style="margin-top:14px"><label for="login-password">Senha</label><input id="login-password" name="password" type="password" placeholder="••••••••" autocomplete="current-password" required></div>${
+    loginError
+      ? `<div class="validation" style="margin-top:14px">⚠ ${esc(loginError)}</div>`
+      : ""
+  }<button class="btn primary" type="submit" style="width:100%;margin-top:20px" ${loginBusy ? "disabled" : ""}>${loginBusy ? '<span class="spin"></span>Entrando...' : "Entrar"}</button></form><button type="button" class="link login-example" data-action="login-example">Preencher exemplo</button><p class="login-note">Protótipo de demonstração — qualquer e-mail e senha funcionam. Nenhum dado é enviado a um servidor.</p></div></div>`;
+}
 function render() {
+  if (!loggedIn) {
+    $("#app").innerHTML = loginScreen();
+    document.body.style.overflow = "";
+    $("#login-email")?.focus();
+    return;
+  }
   const m = metrics(state);
   $("#app").innerHTML =
     `<a class="skip-link" href="#main-content">Pular para o conteúdo principal</a><div class="layout"><aside id="main-navigation" class="sidebar ${menu ? "open" : ""} ${sidebarOpen ? "expanded" : "collapsed"}" aria-label="Menu principal"><button type="button" class="sidebar-toggle" data-action="sidebar" aria-controls="primary-navigation" aria-label="${menu || sidebarOpen ? "Recolher" : "Abrir"} menu lateral" aria-expanded="${menu || sidebarOpen}" title="${menu || sidebarOpen ? "Recolher" : "Abrir"} menu">${menu || sidebarOpen ? "←" : '<img src="wedtech-symbol.png" alt=""><span class="menu-glyph" aria-hidden="true">☰</span>'}</button><div class="brand"><span class="mark"><img src="wedtech-symbol.png" alt="" width="48" height="48"></span><span class="wordmark"><b>Wed</b>Tech</span></div><div class="brand-sub">Tecnologia e conexão para o futuro</div><div class="nav-label">WORKSPACE</div><nav class="nav" id="primary-navigation" aria-label="Navegação principal">${Object.entries(
@@ -235,11 +314,12 @@ function render() {
       )
       .join(
         "",
-      )}</nav><div class="sidebar-bottom"><div class="side-note"><b>Uma operação. Mais possibilidades.</b><br>Um produto. Todos os canais.<br>Uma única inteligência.</div><div><span class="dot"></span>Modo Demonstração</div><div style="margin:10px 0;color:#8fa3bb">Protótipo Hackathon · v0.1</div><button class="link" style="color:#9fc7f3;padding:8px 0" data-action="reset">↺ Reiniciar demonstração</button></div></aside>${menu ? '<button type="button" class="sidebar-backdrop" data-action="menu" aria-label="Fechar menu lateral"></button>' : ""}<div class="workspace"><header class="topbar"><div class="crumb"><button class="mobile-menu" aria-label="Abrir menu" data-action="menu">☰</button><span class="muted">Workspace</span><span class="separator muted">/</span><span>${routes[page]}</span></div><div class="top-right">${badge('<span class="dot"></span>Demonstração', "neutral")}<span class="notif-wrap"><button type="button" class="notif-bell" data-action="toggle-notifications" aria-haspopup="true" aria-expanded="${notifPanelOpen}" aria-label="Notificações${m.unreadNotifications ? ", " + m.unreadNotifications + " não lidas" : ""}">${icon("bell")}${m.unreadNotifications ? `<span class="notif-count">${m.unreadNotifications}</span>` : ""}</button>${notifPanelOpen ? notifPanel() : ""}</span><span class="store-name">Minha loja</span><span class="avatar">ML</span></div></header><main id="main-content" tabindex="-1">${page === "dashboard" ? dashboard(m) : page === "produtos" ? catalog() : page === "one" ? one() : page === "estoque" ? iotPage(m) : page === "marketplaces" ? markets() : page === "financeiro" ? financeiro() : page === "config" ? configPage() : ai(m)}</main></div></div>${modal ? detail() : ""}${fulfillmentModal ? fulfillmentDetail() : ""}${docModal ? docDetail() : ""}<dialog class="reset-dialog" id="reset-dialog"><h2>Recomeçar a apresentação?</h2><p>As alterações simuladas serão apagadas e os dados iniciais serão restaurados.</p><div class="actions"><button class="btn" data-action="cancel-reset">Cancelar</button><button class="btn primary" data-action="confirm-reset">Reiniciar</button></div></dialog>`;
-  if (modal || fulfillmentModal || docModal) {
+      )}</nav><div class="sidebar-bottom"><div class="side-note"><b>Uma operação. Mais possibilidades.</b><br>Um produto. Todos os canais.<br>Uma única inteligência.</div><div><span class="dot"></span>Modo Demonstração</div><div style="margin:10px 0;color:#8fa3bb">Protótipo Hackathon · v0.1</div><button class="link" style="color:#9fc7f3;padding:8px 0;display:block" data-action="reset">↺ Reiniciar demonstração</button><button class="link" style="color:#9fc7f3;padding:8px 0;display:block" data-action="logout">⏻ Sair</button></div></aside>${menu ? '<button type="button" class="sidebar-backdrop" data-action="menu" aria-label="Fechar menu lateral"></button>' : ""}<div class="workspace"><header class="topbar"><div class="crumb"><button class="mobile-menu" aria-label="Abrir menu" data-action="menu">☰</button><span class="muted">Workspace</span><span class="separator muted">/</span><span>${routes[page]}</span></div><div class="top-right">${badge('<span class="dot"></span>Demonstração', "neutral")}<span class="notif-wrap"><button type="button" class="notif-bell" data-action="toggle-notifications" aria-haspopup="true" aria-expanded="${notifPanelOpen}" aria-label="Notificações${m.unreadNotifications ? ", " + m.unreadNotifications + " não lidas" : ""}">${icon("bell")}${m.unreadNotifications ? `<span class="notif-count">${m.unreadNotifications}</span>` : ""}</button>${notifPanelOpen ? notifPanel() : ""}</span><span class="store-name">Minha loja</span><span class="avatar">ML</span></div></header><main id="main-content" tabindex="-1">${page === "dashboard" ? dashboard(m) : page === "produtos" ? catalog() : page === "one" ? one() : page === "estoque" ? iotPage(m) : page === "marketplaces" ? markets() : page === "financeiro" ? financeiro() : page === "config" ? configPage() : ai(m)}</main></div></div>${modal ? detail() : ""}${fulfillmentModal ? fulfillmentDetail() : ""}${docModal ? docDetail() : ""}${tourStep !== null ? tourOverlay() : ""}<dialog class="reset-dialog" id="reset-dialog"><h2>Recomeçar a apresentação?</h2><p>As alterações simuladas serão apagadas e os dados iniciais serão restaurados.</p><div class="actions"><button class="btn" data-action="cancel-reset">Cancelar</button><button class="btn primary" data-action="confirm-reset">Reiniciar</button></div></dialog>`;
+  if (modal || fulfillmentModal || docModal || tourStep !== null) {
     document.body.style.overflow = "hidden";
     $(".close")?.focus();
   } else document.body.style.overflow = "";
+  if (cameraTarget) attachCameraPreview();
 }
 // Painel de notificações (sino do topo) — vendas, separações, despachos e reposição
 function notifPanel() {
@@ -478,15 +558,22 @@ function markets() {
   );
 }
 // Estoque Inteligente — leitor IoT (entrada/saída física) e separação de pedidos
+// Painel de câmera embutido no leitor (complemento do campo de texto, nunca substitui)
+function cameraBox() {
+  return `<div class="camera-box"><video id="camera-preview" playsinline muted></video><div class="camera-hint">${cameraError ? "⚠ " + esc(cameraError) : "Aponte a câmera para o código de barras…"}</div><button type="button" class="btn" data-action="stop-camera">Parar câmera</button></div>`;
+}
 function iotPage(m) {
   const store = state.stores.find((s) => s.id === scanStoreId) || state.stores[0];
   const active = state.fulfillments.filter((f) => f.status !== "shipped");
   const shipped = state.fulfillments.filter((f) => f.status === "shipped").slice(0, 3);
-  const risk = forecast(state)
-    .filter((f) => f.risk !== "ok")
+  const allForecast = forecast(state);
+  const risk = allForecast
+    .filter((f) => f.risk === "critico" || f.risk === "atencao")
     .sort((a, b) => (a.risk === b.risk ? 0 : a.risk === "critico" ? -1 : 1));
+  const overstock = allForecast.filter((f) => f.risk === "excesso");
   const openPOs = state.purchaseOrders.filter((po) => po.status !== "received");
   const openChecks = state.inventoryChecks.filter((c) => c.status === "open");
+  const impact = businessImpact(state);
   const kpis = [
     ["Leituras hoje", state.scanLog.length, "Registradas pelo leitor IoT", "estoque"],
     ["Aguardando separação", m.pendingSeparations, "Pedidos de marketplace na fila", "orders"],
@@ -496,8 +583,8 @@ function iotPage(m) {
   return (
     heading(
       "Estoque Inteligente",
-      "Leitor de código de barras, separação de pedidos e rastreabilidade em tempo real.",
-      `<button class="btn" data-action="new-order" ${busy ? "disabled" : ""}>+ Simular pedido de marketplace</button>`,
+      "Leitor de código de barras, separação de pedidos e rastreabilidade em tempo real. Estoque único, centralizado no Galpão Principal.",
+      `<button class="btn" data-action="export-estoque-csv">⇩ Exportar CSV</button><button class="btn" data-action="new-order" ${busy ? "disabled" : ""}>+ Simular pedido de marketplace</button>`,
     ) +
     `<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">${kpis
       .map(
@@ -506,7 +593,11 @@ function iotPage(m) {
       )
       .join(
         "",
-      )}</div><div class="chart-grid"><section class="card"><div class="section-head"><div><h2>Leitor de código de barras</h2><p>Simule a leitura de um SKU ou código de barras na loja física.</p></div>${badge("🟢 Leitor conectado")}</div><div class="field" style="margin-bottom:18px"><label for="scan-store">Loja / unidade</label><select id="scan-store">${state.stores
+      )}</div>${
+      impact.salesAtRisk || impact.capitalParado
+        ? `<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-bottom:23px"><div class="card kpi" style="border-color:var(--fix-line,#f0cdc9)"><div class="kpi-label">${icon("alert")}Vendas em risco (7 dias)</div><strong style="color:#b9574d">${money(impact.salesAtRisk)}</strong><small>${impact.atRiskCount} produto(s) perto da ruptura</small></div><div class="card kpi" style="border-color:#efdcb3"><div class="kpi-label">${icon("stock")}Capital parado em excesso</div><strong style="color:#966319">${money(impact.capitalParado)}</strong><small>${impact.overstockCount} produto(s) com baixo giro</small></div></div>`
+        : ""
+    }<div class="chart-grid"><section class="card"><div class="section-head"><div><h2>Leitor de código de barras</h2><p>Simule a leitura de um SKU ou código de barras na loja física.</p></div>${badge("🟢 Leitor conectado")}</div><div class="field" style="margin-bottom:18px"><label for="scan-store">Loja / unidade</label><select id="scan-store">${state.stores
       .map(
         (s) =>
           `<option value="${s.id}" ${s.id === scanStoreId ? "selected" : ""}>${esc(s.name)}</option>`,
@@ -517,7 +608,7 @@ function iotPage(m) {
       scanMode === "entrada"
         ? '<div class="field" style="width:90px"><label for="scan-qty">Qtd.</label><input id="scan-qty" name="qty" type="number" min="1" max="9999" value="1"></div>'
         : ""
-    }<button class="btn primary" ${busy ? "disabled" : ""}>${busy ? "Bipando…" : "✧ Bipar"}</button></form><p class="caption">Loja selecionada: ${esc(store?.name || "—")}. A leitura simula um leitor IoT (RFID/código de barras) conectado ao estoque central.</p>${
+    }<button class="btn primary" ${busy ? "disabled" : ""}>${busy ? "Bipando…" : "✧ Bipar"}</button>${cameraTarget !== "store" ? `<button type="button" class="btn" data-camera-start="store" ${busy ? "disabled" : ""}>📷 Usar câmera</button>` : ""}</form>${cameraTarget === "store" ? cameraBox() : ""}<p class="caption">Loja selecionada: ${esc(store?.name || "—")}. A leitura simula um leitor IoT (RFID/código de barras) conectado ao estoque central — ou use a câmera para bipar de verdade.</p>${
       scanFeedback
         ? `<div class="validation ${scanFeedback.type === "ok" ? "ok" : ""}">${scanFeedback.type === "ok" ? "✓ " : "⚠ "}${esc(scanFeedback.text)}</div>`
         : ""
@@ -553,6 +644,15 @@ function iotPage(m) {
             )
             .join("")
         : '<div class="empty">Nenhum produto em risco de ruptura no momento.</div>'
+    }</section><section class="card" style="margin-top:22px"><div class="section-head"><div><h2>Estoque parado</h2><p>Produtos com baixo giro, ocupando espaço e capital — o outro lado da gestão inteligente de estoque.</p></div>${badge("✧ WedTech AI", "neutral")}</div>${
+      overstock.length
+        ? overstock
+            .map(
+              (f) =>
+                `<div class="channel-row"><span>📦</span><div>${esc(f.name)}<div class="muted" style="font-size:12px">${f.stock} un. · cobertura de ~${f.daysToStockout ?? "?"} dias</div></div>${badge("liquidar " + f.suggestedDiscount + "%", "warn")}</div>`,
+            )
+            .join("")
+        : '<div class="empty">Nenhum produto parado no momento.</div>'
     }</section><section class="card" style="margin-top:22px"><div class="section-head"><div><h2>Fornecedores e reposição automática</h2><p>Pedidos de compra gerados a partir da previsão de ruptura.</p></div><button class="btn primary" data-action="auto-po" ${busy ? "disabled" : ""}>✧ Gerar pedidos automaticamente</button></div>${
       openPOs.length
         ? `<div class="table-wrap"><table><thead><tr><th>Pedido</th><th>Fornecedor</th><th>Itens</th><th>Status</th><th></th></tr></thead><tbody>${openPOs
@@ -585,16 +685,25 @@ function fulfillmentDetail() {
   const f = state.fulfillments.find((f) => f.id === fulfillmentModal);
   if (!f) return "";
   const done = f.items.every((it) => it.scanned);
-  return `<div class="modal-overlay"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="fulfillment-title"><div class="drawer-top"><span class="wedtech-label">SEPARAÇÃO DE PEDIDO</span><button class="close" data-action="close-fulfillment" aria-label="Fechar separação">×</button></div><h1 id="fulfillment-title">${esc(f.id)}</h1><p class="muted" style="font-size:14px;margin-top:10px">${logo(f.channel)} ${esc(channels.find((c) => c.id === f.channel)?.name || "")} · Recebido ${esc(f.createdAt)}</p><div style="margin-top:16px">${badge(fulfillmentStatus[f.status], f.status === "pending" ? "neutral" : f.status === "separating" ? "warn" : "")}</div><h3 style="margin-top:24px;margin-bottom:12px">Itens do pedido</h3>${f.items
+  // Rota de separação sugerida: agrupa a coleta por corredor do Galpão Principal
+  // para reduzir deslocamento — a mesma lista de itens, só reordenada pela IA.
+  const route = f.items
+    .map((it, i) => ({
+      ...it,
+      aisle: state.products.find((p) => p.id === it.productId)?.aisle || "—",
+      original: i,
+    }))
+    .sort((a, b) => a.aisle.localeCompare(b.aisle) || a.original - b.original);
+  return `<div class="modal-overlay"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="fulfillment-title"><div class="drawer-top"><span class="wedtech-label">SEPARAÇÃO DE PEDIDO</span><button class="close" data-action="close-fulfillment" aria-label="Fechar separação">×</button></div><h1 id="fulfillment-title">${esc(f.id)}</h1><p class="muted" style="font-size:14px;margin-top:10px">${logo(f.channel)} ${esc(channels.find((c) => c.id === f.channel)?.name || "")} · Recebido ${esc(f.createdAt)}</p><div style="margin-top:16px">${badge(fulfillmentStatus[f.status], f.status === "pending" ? "neutral" : f.status === "separating" ? "warn" : "")}</div><h3 style="margin-top:24px;margin-bottom:4px">Rota de separação sugerida</h3><p class="caption" style="margin-top:0">Coleta agrupada por corredor do Galpão Principal, na ordem abaixo.</p>${route
     .map(
-      (it) =>
-        `<div class="channel-row"><span>${it.scanned ? "✓" : "○"}</span><div>${esc(it.name)}<div class="muted" style="font-size:12px">${esc(it.sku)} · Qtd. ${it.qty}</div></div>${badge(it.scanned ? "Bipado" : "Pendente", it.scanned ? "" : "neutral")}</div>`,
+      (it, i) =>
+        `<div class="channel-row"><span>${it.scanned ? "✓" : i + 1}</span><div>${esc(it.name)}<div class="muted" style="font-size:12px">${esc(it.sku)} · Qtd. ${it.qty} · Corredor ${esc(it.aisle)}</div></div>${badge(it.scanned ? "Bipado" : "Pendente", it.scanned ? "" : "neutral")}</div>`,
     )
     .join(
       "",
     )}${
     f.status !== "separated" && f.status !== "shipped"
-      ? `<form id="fulfillment-scan-form" style="display:flex;align-items:flex-end;gap:12px;margin-top:18px"><div class="field" style="flex:1"><label for="fulfillment-scan-code">Bipar código do item</label><input id="fulfillment-scan-code" name="code" autocomplete="off" required placeholder="SKU ou código de barras"></div><button class="btn primary" ${busy ? "disabled" : ""}>${busy ? "Bipando…" : "✧ Bipar"}</button></form>${
+      ? `<form id="fulfillment-scan-form" style="display:flex;align-items:flex-end;gap:12px;margin-top:18px"><div class="field" style="flex:1"><label for="fulfillment-scan-code">Bipar código do item</label><input id="fulfillment-scan-code" name="code" autocomplete="off" required placeholder="SKU ou código de barras"></div><button class="btn primary" ${busy ? "disabled" : ""}>${busy ? "Bipando…" : "✧ Bipar"}</button>${cameraTarget !== "fulfillment" ? `<button type="button" class="btn" data-camera-start="fulfillment" ${busy ? "disabled" : ""}>📷 Câmera</button>` : ""}</form>${cameraTarget === "fulfillment" ? cameraBox() : ""}${
           fulfillmentFeedback ? `<div class="validation">⚠ ${esc(fulfillmentFeedback)}</div>` : ""
         }<button class="btn primary" style="width:100%;margin-top:16px" data-action="confirm-separation" ${busy || !done ? "disabled" : ""}>${busy ? "Confirmando…" : "Confirmar separação"}</button>`
       : f.status === "separated"
@@ -608,7 +717,7 @@ function docDetail() {
   if (type === "invoice") {
     const inv = state.invoices.find((i) => i.id === id);
     if (!inv) return "";
-    return `<div class="modal-overlay"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="doc-title"><div class="drawer-top"><span class="wedtech-label">NOTA FISCAL SIMULADA</span><button class="close" data-action="close-doc" aria-label="Fechar documento">×</button></div><h1 id="doc-title">${esc(inv.id)}</h1><p class="muted" style="font-size:13px;margin-top:8px">Chave de acesso demonstrativa: ${esc(inv.key.replace(/(.{4})/g, "$1 ").trim())}</p><div class="validation" style="margin-top:16px">⚠ Documento demonstrativo gerado pelo protótipo. Não possui validade fiscal.</div><h3 style="margin-top:24px;margin-bottom:12px">Itens</h3>${inv.items
+    return `<div class="modal-overlay"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="doc-title"><div class="drawer-top"><span class="wedtech-label">NOTA FISCAL SIMULADA</span><button class="close" data-action="close-doc" aria-label="Fechar documento">×</button></div><h1 id="doc-title">${esc(inv.id)}</h1><p class="muted" style="font-size:13px;margin-top:8px">Chave de acesso demonstrativa: ${esc(inv.key.replace(/(.{4})/g, "$1 ").trim())}</p><div class="qr-box">${renderQR("NFe|" + inv.id + "|" + inv.key + "|" + inv.total, 140)}<span class="caption">QR real — leia com a câmera do celular para conferir os dados abaixo</span></div><div class="validation" style="margin-top:16px">⚠ Documento demonstrativo gerado pelo protótipo. Não possui validade fiscal.</div><h3 style="margin-top:24px;margin-bottom:12px">Itens</h3>${inv.items
       .map(
         (it) =>
           `<div class="channel-row"><span>${esc(it.name)}<small style="display:block">${esc(it.sku)} · Qtd. ${it.qty}</small></span><b style="margin-left:auto">${money(it.price * it.qty)}</b></div>`,
@@ -621,9 +730,15 @@ function docDetail() {
     const lbl = state.labels.find((l) => l.id === id);
     if (!lbl) return "";
     const c = channels.find((c) => c.id === lbl.channel);
-    return `<div class="modal-overlay"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="doc-title"><div class="drawer-top"><span class="wedtech-label">ETIQUETA DE ENVIO SIMULADA</span><button class="close" data-action="close-doc" aria-label="Fechar documento">×</button></div><h1 id="doc-title">${esc(lbl.trackingCode)}</h1><div class="validation" style="margin-top:16px">⚠ Etiqueta demonstrativa. Não é um código de rastreio real.</div><div class="detail-stats" style="grid-template-columns:repeat(2,1fr)"><div><small>Canal</small><strong>${esc(c?.name || "—")}</strong></div><div><small>Peso estimado</small><strong>${lbl.weight} kg</strong></div></div><h3 style="margin-top:24px;margin-bottom:12px">Destinatário</h3><p style="font-size:14px">${esc(lbl.recipient)}</p><p class="caption">Pedido ${esc(lbl.fulfillmentId)} · Gerada em ${esc(lbl.date)}.</p></section></div>`;
+    return `<div class="modal-overlay"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="doc-title"><div class="drawer-top"><span class="wedtech-label">ETIQUETA DE ENVIO SIMULADA</span><button class="close" data-action="close-doc" aria-label="Fechar documento">×</button></div><h1 id="doc-title">${esc(lbl.trackingCode)}</h1><div class="qr-box">${renderQR("WT|" + lbl.trackingCode + "|" + lbl.fulfillmentId, 140)}<span class="caption">QR real com o código de rastreio</span></div><div class="validation" style="margin-top:16px">⚠ Etiqueta demonstrativa. Não é um código de rastreio real.</div><div class="detail-stats" style="grid-template-columns:repeat(2,1fr)"><div><small>Canal</small><strong>${esc(c?.name || "—")}</strong></div><div><small>Peso estimado</small><strong>${lbl.weight} kg</strong></div></div><h3 style="margin-top:24px;margin-bottom:12px">Destinatário</h3><p style="font-size:14px">${esc(lbl.recipient)}</p><p class="caption">Pedido ${esc(lbl.fulfillmentId)} · Gerada em ${esc(lbl.date)}.</p></section></div>`;
   }
   return "";
+}
+// Tour guiado — mostrado uma vez após o primeiro login, dispensável a qualquer momento
+function tourOverlay() {
+  const step = tourSlides[tourStep];
+  const last = tourStep === tourSlides.length - 1;
+  return `<div class="modal-overlay" style="justify-content:center;align-items:center"><section class="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-title"><div class="tour-icon">${icon(step.icon)}</div><div class="tour-dots">${tourSlides.map((_, i) => `<span class="${i === tourStep ? "on" : ""}"></span>`).join("")}</div><h2 id="tour-title">${esc(step.title)}</h2><p>${esc(step.text)}</p><div class="tour-actions"><button type="button" class="link" data-action="tour-skip">Pular tour</button><button type="button" class="btn primary" data-action="tour-next">${last ? "Começar" : "Próximo →"}</button></div></section></div>`;
 }
 // Configurações — empresa, lojas/CDs, produtos, canais e operadores
 function configPage() {
@@ -641,14 +756,14 @@ function configPage() {
       )
       .join(
         "",
-      )}</section></div><section class="card" style="margin-top:22px"><div class="section-head"><div><h2>Lojas e centros de distribuição</h2><p>Cadastre onde o estoque físico é lido pelo leitor IoT.</p></div><button class="btn primary" data-action="toggle-store-form">${storeFormOpen ? "Cancelar" : "+ Nova loja"}</button></div>${
+      )}</section></div><section class="card" style="margin-top:22px"><div class="section-head"><div><h2>Lojas e centros de distribuição</h2><p>O estoque é único e compartilhado, mas fisicamente centralizado no <b>Galpão Principal</b> — é de lá que a separação de pedidos e a reposição das lojas partem.</p></div><button class="btn primary" data-action="toggle-store-form">${storeFormOpen ? "Cancelar" : "+ Nova loja"}</button></div>${
       storeFormOpen
         ? '<form id="store-form" class="form-grid" style="margin-bottom:22px"><div class="field"><label for="store-name">Nome</label><input id="store-name" name="name" required maxlength="80" placeholder="Ex.: Loja Vila Mariana"></div><div class="field"><label for="store-type">Tipo</label><select id="store-type" name="type"><option value="loja">Loja física</option><option value="cd">Centro de distribuição</option></select></div><div class="field"><label for="store-cnpj">CNPJ</label><input id="store-cnpj" name="cnpj" required maxlength="20" placeholder="00.000.000/0000-00"></div><div class="field"><label for="store-address">Endereço</label><input id="store-address" name="address" maxlength="140"></div><div class="field full"><button class="btn primary" type="submit">Cadastrar loja</button></div></form>'
         : ""
     }<div class="table-wrap"><table><thead><tr><th>Loja</th><th>Tipo</th><th>CNPJ</th><th>Endereço</th><th>Status</th></tr></thead><tbody>${state.stores
       .map(
         (s) =>
-          `<tr><td><b>${esc(s.name)}</b></td><td class="muted">${s.type === "cd" ? "Centro de distribuição" : "Loja física"}</td><td class="muted">${esc(s.cnpj)}</td><td class="muted">${esc(s.address)}</td><td>${badge(s.active ? "Ativa" : "Inativa", s.active ? "" : "neutral")}</td></tr>`,
+          `<tr><td><b>${esc(s.name)}</b>${s.hub ? " " + badge("🏭 Galpão Principal") : ""}</td><td class="muted">${s.type === "cd" ? "Centro de distribuição" : "Loja física"}</td><td class="muted">${esc(s.cnpj)}</td><td class="muted">${esc(s.address)}</td><td>${badge(s.active ? "Ativa" : "Inativa", s.active ? "" : "neutral")}</td></tr>`,
       )
       .join(
         "",
@@ -704,7 +819,7 @@ function financeiro() {
     heading(
       "Financeiro",
       "Receita, custo, lucro e despesas da operação — tudo em um só lugar.",
-      `<button class="btn primary" data-action="toggle-expense-form" ${busy ? "disabled" : ""}>${expenseFormOpen ? "Cancelar" : "+ Nova despesa"}</button>`,
+      `<button class="btn" data-action="export-despesas-csv">⇩ Exportar CSV</button><button class="btn primary" data-action="toggle-expense-form" ${busy ? "disabled" : ""}>${expenseFormOpen ? "Cancelar" : "+ Nova despesa"}</button>`,
     ) +
     `<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">${kpis
       .map(
@@ -924,6 +1039,83 @@ async function handleFulfillmentScan(form) {
   render();
   $("#fulfillment-scan-code")?.focus();
 }
+// Bipagem por câmera — complemento do campo de texto, nunca o substitui: se a
+// câmera falhar (sem suporte, permissão negada, sem hardware), o texto continua
+// funcionando normalmente.
+function attachCameraPreview() {
+  const v = $("#camera-preview");
+  if (v && cameraStream && v.srcObject !== cameraStream) {
+    v.srcObject = cameraStream;
+    v.play().catch(() => {});
+  }
+}
+function stopCamera() {
+  cameraTarget = null;
+  cameraError = "";
+  if (cameraLoopId) cancelAnimationFrame(cameraLoopId);
+  cameraLoopId = null;
+  if (cameraStream) {
+    cameraStream.getTracks().forEach((t) => t.stop());
+    cameraStream = null;
+  }
+}
+async function startCamera(target) {
+  if (busy) return;
+  cameraError = "";
+  if (!("BarcodeDetector" in window)) {
+    cameraError =
+      "Seu navegador não suporta leitura por câmera (BarcodeDetector). Use o campo de texto.";
+    cameraTarget = target;
+    render();
+    return;
+  }
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" },
+      audio: false,
+    });
+  } catch {
+    cameraError =
+      "Não foi possível acessar a câmera (permissão negada ou indisponível). Use o campo de texto.";
+    cameraTarget = target;
+    render();
+    return;
+  }
+  cameraTarget = target;
+  render();
+  const detector = new window.BarcodeDetector({
+    formats: ["ean_13", "ean_8", "code_128", "upc_a", "upc_e", "qr_code"],
+  });
+  const tick = async () => {
+    if (cameraTarget !== target || !cameraStream) return;
+    const video = $("#camera-preview");
+    if (video && video.readyState >= 2) {
+      try {
+        const codes = await detector.detect(video);
+        if (codes.length) {
+          const value = codes[0].rawValue;
+          stopCamera();
+          if (target === "store") {
+            const input = $("#scan-code");
+            if (input) {
+              input.value = value;
+              handleScan($("#scan-form"));
+            }
+          } else {
+            const input = $("#fulfillment-scan-code");
+            if (input) {
+              input.value = value;
+              handleFulfillmentScan($("#fulfillment-scan-form"));
+            }
+          }
+          return;
+        }
+      } catch {}
+    }
+    cameraLoopId = requestAnimationFrame(tick);
+  };
+  cameraLoopId = requestAnimationFrame(tick);
+}
 // Cadastro de loja/CD no painel de configurações
 function handleAddStore(form) {
   try {
@@ -954,6 +1146,45 @@ function handleSaveCompany(form) {
   });
   save();
   toast("Dados da empresa atualizados.");
+  render();
+}
+// Login — protótipo sem autenticação real: qualquer e-mail/senha válidos entram.
+async function handleLogin(form) {
+  if (loginBusy) return;
+  const email = form.elements.email.value.trim();
+  const password = form.elements.password.value;
+  if (!email || !password) {
+    loginError = "Informe e-mail e senha.";
+    render();
+    return;
+  }
+  loginBusy = true;
+  loginError = "";
+  render();
+  await pause(650);
+  loginBusy = false;
+  loggedIn = true;
+  try {
+    sessionStorage.setItem("wedtech-session", "1");
+  } catch {}
+  tourStep = seenTour() ? null : 0;
+  render();
+}
+function seenTour() {
+  try {
+    return localStorage.getItem("wedtech-tour-seen") === "1";
+  } catch {
+    return true;
+  }
+}
+function logout() {
+  loggedIn = false;
+  loginError = "";
+  stopLive();
+  stopCamera();
+  try {
+    sessionStorage.removeItem("wedtech-session");
+  } catch {}
   render();
 }
 // Cadastro de fornecedor no painel de configurações
@@ -1092,6 +1323,10 @@ function stopLive() {
 }
 // DOM events
 document.addEventListener("submit", (e) => {
+  if (e.target.id === "login-form") {
+    e.preventDefault();
+    handleLogin(e.target);
+  }
   if (e.target.id === "product-form") {
     e.preventDefault();
     prepare(e.target);
@@ -1174,6 +1409,11 @@ document.addEventListener("change", (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  if (cameraTarget) {
+    stopCamera();
+    render();
+    return;
+  }
   if (docModal && !busy) {
     docModal = null;
     render();
@@ -1222,6 +1462,10 @@ document.addEventListener("click", async (e) => {
     fulfillmentModal = el.dataset.fulfillment;
     fulfillmentFeedback = "";
     render();
+    return;
+  }
+  if (el.dataset.cameraStart) {
+    startCamera(el.dataset.cameraStart);
     return;
   }
   if (el.dataset.dispatch) {
@@ -1500,6 +1744,64 @@ document.addEventListener("click", async (e) => {
     }
     render();
   }
+  if (a === "login-example") {
+    $("#login-email").value = "demo@wedtech.com.br";
+    $("#login-password").value = "wedtech123";
+    loginError = "";
+  }
+  if (a === "logout" && !busy) logout();
+  if (a === "stop-camera") {
+    stopCamera();
+    render();
+  }
+  if (a === "export-estoque-csv") {
+    const f = forecast(state);
+    downloadCSV(
+      "wedtech-estoque.csv",
+      ["Produto", "SKU", "Estoque", "Mínimo", "Dias até esgotar", "Situação"],
+      state.products.map((p) => {
+        const fc = f.find((x) => x.productId === p.id);
+        return [
+          p.name,
+          p.sku,
+          p.stock,
+          p.minStock,
+          fc?.daysToStockout ?? "",
+          fc?.risk === "critico"
+            ? "Crítico"
+            : fc?.risk === "atencao"
+              ? "Atenção"
+              : fc?.risk === "excesso"
+                ? "Estoque parado"
+                : "OK",
+        ];
+      }),
+    );
+  }
+  if (a === "export-despesas-csv") {
+    downloadCSV(
+      "wedtech-despesas.csv",
+      ["Categoria", "Descrição", "Data", "Valor"],
+      state.expenses.map((e) => [e.category, e.description, e.date, e.amount]),
+    );
+  }
+  if (a === "tour-next") {
+    tourStep = tourStep === null ? 0 : tourStep + 1;
+    if (tourStep >= tourSlides.length) {
+      tourStep = null;
+      try {
+        localStorage.setItem("wedtech-tour-seen", "1");
+      } catch {}
+    }
+    render();
+  }
+  if (a === "tour-skip") {
+    tourStep = null;
+    try {
+      localStorage.setItem("wedtech-tour-seen", "1");
+    } catch {}
+    render();
+  }
   if (a === "reset" && !busy) $("#reset-dialog").showModal();
   if (a === "cancel-reset") $("#reset-dialog").close();
   if (a === "confirm-reset") {
@@ -1523,6 +1825,7 @@ document.addEventListener("click", async (e) => {
     notifPanelOpen = false;
     docModal = null;
     stopLive();
+    stopCamera();
     save();
     go("dashboard");
     render();
@@ -1564,6 +1867,7 @@ function route() {
   fulfillmentModal = null;
   docModal = null;
   notifPanelOpen = false;
+  stopCamera();
   render();
   window.scrollTo(0, 0);
 }

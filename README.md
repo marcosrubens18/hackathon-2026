@@ -7,26 +7,28 @@ Identidade visual baseada em azul-marinho, azul tecnológico, grafite e superfí
 
 ## Abrir
 
-Abra `dist/index.html` no navegador. Não precisa instalar dependências, criar conta, informar chave ou conectar serviços.
+Abra `dist/index.html` no navegador. Não precisa instalar dependências, criar conta, informar chave ou conectar serviços — na tela de login, clique em "Preencher exemplo" e entre (qualquer e-mail/senha funciona; é só um protótipo).
 
 Alternativamente, com Node.js instalado, execute `npm start` nesta pasta e abra http://127.0.0.1:4173. Para encerrar, use Ctrl+C no terminal.
 
-## Roteiro de apresentação (7 a 10 minutos)
+## Roteiro de apresentação (8 a 11 minutos)
 
+0. **Login (10 s):** clique em "Preencher exemplo" e entre — é um protótipo, qualquer e-mail/senha funciona. Um tour guiado de 4 passos aparece na primeira vez ("Pular tour" a qualquer momento).
 1. **Dashboard (40 s):** apresente indicadores, gráfico e recomendações do copiloto. Clique no sino de **notificações** para mostrar o histórico de eventos ("Nova venda no Mercado Livre..."). Ative **"Operação ao vivo"** para a demo gerar novos pedidos sozinha em segundo plano.
 2. **Produtos (30 s):** mostre o catálogo único (com código de barras por produto) e abra Nike Revolution 8.
 3. **WedTech One (90 s):** clique em “Preencher exemplo”, altere os dados se desejar e prepare os anúncios. Compare as versões por canal, corrija os avisos com WedTech AI e publique.
-4. **Estoque Inteligente (2 min):** abra **Estoque Inteligente**.
-   - Bipe o SKU `NK-RV8-001` em modo Saída (venda balcão) — mostra a sincronização e a **NF simulada** gerada.
-   - Abra o pedido **SEP-2201**, bipe `MS-G500-003` e `TC-K68-007` (ou seus códigos de barras), confirme a separação e despache — mostrando o fluxo “venda no marketplace → separação física → baixa → NF/etiqueta → despacho”.
-   - Mostre a seção **Previsão de ruptura** (estimativa de dias até esgotar) e clique em **"Gerar pedidos automaticamente"** para criar um pedido de compra a um fornecedor a partir dessa previsão — a peça de automação da Dor 1.
+4. **Estoque Inteligente (3 min):** abra **Estoque Inteligente** — "estoque único, centralizado no Galpão Principal".
+   - Bipe o SKU `NK-RV8-001` em modo Saída (venda balcão) — mostra a sincronização e a **NF simulada** (com QR code real) gerada. Se o navegador suportar `BarcodeDetector`, mostre também o botão **📷 Usar câmera** (complementa o campo de texto, nunca o substitui).
+   - Abra o pedido **SEP-2201** e mostre a **rota de separação sugerida** (itens agrupados por corredor do Galpão Principal). Bipe `MS-G500-003` e `TC-K68-007` (ou seus códigos de barras), confirme a separação e despache — mostrando o fluxo “venda no marketplace → separação física → baixa → NF/etiqueta com QR → despacho”.
+   - Mostre os cards **"Vendas em risco"** e **"Capital parado"** (impacto financeiro da previsão), a seção **Previsão de ruptura** e a nova seção **Estoque parado** (produtos com baixo giro e sugestão de liquidação). Clique em **"Gerar pedidos automaticamente"** para criar um pedido de compra a um fornecedor a partir da previsão — a peça de automação da Dor 1.
    - Clique em **"Simular contagem física"** para mostrar uma divergência de inventário e corrigi-la com um clique ("Corrigir com WedTech AI").
+   - Clique em **"Exportar CSV"** para baixar o estoque/previsão.
 5. **Marketplaces (20 s):** simule a conexão do Magalu.
-6. **Financeiro (30 s):** mostre receita, custo das vendas, lucro bruto/líquido e a margem por produto. Registre uma despesa ao vivo.
-7. **Configurações (30 s):** mostre os dados da empresa, as lojas/CDs (usados pelo leitor IoT) e os fornecedores (usados na reposição automática). Cadastre uma nova loja ou fornecedor ao vivo.
-8. **WedTech AI (30 s):** clique em “Resuma minha operação.” O resumo incorpora vendas, separações, pedidos de compra em aberto e mais. Pergunte também “Qual meu lucro hoje?” ou “Tenho pedidos de compra em aberto?”.
+6. **Financeiro (30 s):** mostre receita, custo das vendas, lucro bruto/líquido e a margem por produto (varia por categoria). Registre uma despesa ao vivo; exporte o CSV de despesas.
+7. **Configurações (30 s):** mostre os dados da empresa, as lojas/CDs (o **Galpão Principal** tem um selo próprio) e os fornecedores (usados na reposição automática). Cadastre uma nova loja ou fornecedor ao vivo.
+8. **WedTech AI (30 s):** clique em “Resuma minha operação.” O resumo incorpora vendas, separações, pedidos de compra em aberto e o impacto financeiro. Pergunte também “Qual meu lucro hoje?”, “Tenho produtos parados?” ou “Qual o impacto financeiro do estoque?”.
 
-Use **Reiniciar demonstração** no rodapé da barra lateral antes da próxima apresentação (também desliga a operação ao vivo, se estiver ativa).
+Use **Reiniciar demonstração** no rodapé da barra lateral antes da próxima apresentação (também desliga a operação ao vivo, se estiver ativa). **Sair** encerra a sessão e volta para o login.
 
 ## Dados e limites
 
@@ -43,12 +45,19 @@ Use **Reiniciar demonstração** no rodapé da barra lateral antes da próxima a
 - **NF e etiqueta:** geradas automaticamente a cada venda física ou despacho de pedido. São documentos demonstrativos (inclusive a "chave de acesso" e o código de rastreio) e **não têm validade fiscal ou logística real**.
 - **Financeiro:** custo de aquisição por produto e despesas operacionais são estimativas simuladas (despesas com rateio diário, comparável à receita "de hoje" exibida no restante do app), não dados contábeis reais.
 - **Notificações e operação ao vivo:** o sino no topo mostra os últimos eventos (vendas, separações, despachos, reposições) e zera o contador ao abrir. "Operação ao vivo" gera novos pedidos de marketplace periodicamente enquanto ativado, só para manter a demonstração em movimento.
+- **Login e tour:** protótipo sem autenticação real — qualquer e-mail e senha entram; a sessão fica só no navegador (`sessionStorage`), então um recarregamento de página não desloga durante a apresentação. O tour guiado aparece uma vez (controlado por `localStorage`) e pode ser pulado.
+- **Leitura por câmera:** complementa o campo de texto, nunca o substitui. Usa a API nativa `BarcodeDetector` do navegador (hoje com suporte parcial, principalmente Chrome/Edge); sem suporte ou sem permissão de câmera, mostra um aviso claro e o campo de texto continua funcionando normalmente. Nenhum vídeo é enviado a servidor algum.
+- **Galpão Principal:** o estoque é único e compartilhado entre lojas e canais (não há saldo separado por loja), mas narrativamente centralizado no CD Guarulhos, identificado como Galpão Principal em Configurações.
+- **Estoque parado e impacto financeiro:** além da previsão de ruptura, a WedTech AI identifica produtos com baixo giro (cobertura acima de 28 dias) e sugere um desconto de liquidação. Os cards "Vendas em risco" e "Capital parado" traduzem a previsão em reais — estimativas simples a partir do catálogo, não projeções estatísticas.
+- **Rota de separação sugerida:** cada produto tem um corredor demonstrativo no Galpão Principal; ao separar um pedido, os itens aparecem reordenados por corredor para reduzir deslocamento.
+- **QR code:** as NFs e etiquetas simuladas trazem um QR code real, gerado localmente por um encoder vendorizado (`dist/qrcode.js`, adaptado de [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator), MIT) — funciona offline, sem nenhum serviço externo, e foi validado decodificando-o de volta com uma lib de terceiros durante o desenvolvimento.
+- **Exportação CSV:** os botões "Exportar CSV" (Estoque Inteligente e Financeiro) geram o arquivo localmente no navegador; nenhum dado sai da máquina.
 - **Configurações:** dados da empresa (razão social/CNPJ/IE), lojas/centros de distribuição e fornecedores são editáveis e ficam salvos como os demais dados da demonstração. Operadores são ilustrativos, sem autenticação real.
-- Publicações, conexões, vendas, leituras do leitor IoT, pedidos de compra, NF e etiquetas não fazem nenhuma chamada a APIs externas ou hardware/serviços reais. Uploads de imagem ficam locais, limitados a 1 MB por imagem.
-- Protótipo sem backend, autenticação, pagamentos ou integrações. HTML, CSS e JavaScript sem dependências; funciona offline.
+- Publicações, conexões, vendas, leituras do leitor IoT, pedidos de compra, NF, etiquetas e exportações não fazem nenhuma chamada a APIs externas ou hardware/serviços reais além da câmera do próprio navegador (quando usada). Uploads de imagem ficam locais, limitados a 1 MB por imagem.
+- Protótipo sem backend, autenticação, pagamentos ou integrações. HTML, CSS e JavaScript sem dependências externas em tempo de execução; funciona offline.
 
 ## Verificação
 
-Execute `npm run check` para verificar sintaxe e testes de consistência: estoque, vendas, publicação, correção de anúncio, leitor IoT (entrada/saída), separação e despacho de pedidos com NF/etiqueta, previsão de ruptura, pedidos de compra a fornecedores, divergência de inventário, financeiro (lucro/despesas), notificações, cadastro de lojas/fornecedores, persistência e renderização das oito áreas.
+Execute `npm run check` para verificar sintaxe e testes de consistência: estoque, vendas, publicação, correção de anúncio, leitor IoT (entrada/saída), separação e despacho de pedidos com NF/etiqueta (QR incluído) e rota de separação, previsão de ruptura e de estoque parado, impacto financeiro, pedidos de compra a fornecedores, divergência de inventário, financeiro (lucro/despesas), notificações, login/tour, cadastro de lojas/fornecedores, persistência e renderização das oito áreas.
 
 A interface opcional WebMCP expõe apenas consulta ao resumo da operação, com detecção de suporte. Não foi validada em um navegador com WebMCP disponível. A navegação e os fluxos principais não dependem desse recurso. A validação realizada foi por testes locais de estado e renderização, sem automação visual do navegador.

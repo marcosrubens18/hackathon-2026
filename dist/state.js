@@ -150,6 +150,16 @@
       Acessórios: 0.45,
       Vestuário: 0.4,
     };
+    // Corredor do Galpão Principal onde cada categoria fica armazenada — usado na
+    // sugestão de rota de separação (agrupar a coleta por corredor reduz deslocamento).
+    const aisleByCategory = {
+      Calçados: "A",
+      Vestuário: "A",
+      Informática: "B",
+      Eletrônicos: "C",
+      Casa: "D",
+      Acessórios: "D",
+    };
     const products = items.map((p, i) => ({
       id: "p" + i,
       name: p[0],
@@ -167,6 +177,8 @@
       barcode: "789123450" + String(i + 1).padStart(4, "0"),
       // Fornecedor vinculado, usado na geração automática de pedidos de compra
       supplierId: supplierByCategory[p[5]] || "sp1",
+      // Corredor no Galpão Principal, usado na rota de separação sugerida
+      aisle: (aisleByCategory[p[5]] || "E") + ((i % 4) + 1),
       description:
         i === 0
           ? "Tênis masculino para corrida. Conforto e leveza para acompanhar seu ritmo."
@@ -229,6 +241,10 @@
           cnpj: "48.123.456/0002-80",
           address: "Rod. Hélio Smidt, 500 — Cumbica, Guarulhos/SP",
           active: true,
+          // Galpão Principal: o estoque é único e compartilhado, mas fisicamente
+          // centralizado aqui — é daqui que a separação de pedidos e a reposição
+          // das lojas partem.
+          hub: true,
         },
       ],
       // Fornecedores cadastrados, usados na reposição automática de estoque
@@ -395,7 +411,10 @@
         .length,
     };
   }
-  // Previsão de ruptura: velocidade de venda e dias restantes até esgotar, por produto
+  // Previsão de ruptura E de excesso: velocidade de venda, dias restantes até
+  // esgotar (ou dias de cobertura parada) por produto — os dois lados da mesma
+  // moeda numa gestão de estoque inteligente.
+  const OVERSTOCK_DAYS = 28; // cobertura acima disso é considerada estoque parado
   function forecast(s) {
     return s.products.map((p) => {
       const sold = s.orders
@@ -407,12 +426,24 @@
       const daysToStockout =
         dailySales > 0 ? Math.round((p.stock / dailySales) * 10) / 10 : null;
       const min = p.minStock ?? 20;
-      const risk =
-        p.stock <= min
-          ? "critico"
-          : daysToStockout !== null && daysToStockout <= 3
-            ? "atencao"
-            : "ok";
+      let risk, suggestedDiscount;
+      if (p.stock <= min) {
+        risk = "critico";
+      } else if (daysToStockout !== null && daysToStockout <= 3) {
+        risk = "atencao";
+      } else if (
+        (daysToStockout === null || daysToStockout >= OVERSTOCK_DAYS) &&
+        p.stock > min * 2
+      ) {
+        risk = "excesso";
+        const days = daysToStockout ?? OVERSTOCK_DAYS + 30;
+        suggestedDiscount = Math.max(
+          10,
+          Math.min(30, 10 + Math.round((days - OVERSTOCK_DAYS) / 4)),
+        );
+      } else {
+        risk = "ok";
+      }
       return {
         productId: p.id,
         name: p.name,
@@ -421,8 +452,39 @@
         dailySales,
         daysToStockout,
         risk,
+        suggestedDiscount: suggestedDiscount ?? null,
       };
     });
+  }
+  // Traduz a previsão em impacto financeiro: quanto está em risco de não vender
+  // (ruptura) e quanto capital está parado em estoque excedente — para o pitch.
+  function businessImpact(s) {
+    const list = forecast(s);
+    const priceOf = (id) => s.products.find((p) => p.id === id)?.price || 0;
+    const costOf = (id) => s.products.find((p) => p.id === id)?.cost || 0;
+    const atRisk = list.filter((f) => f.risk === "critico" || f.risk === "atencao");
+    const overstock = list.filter((f) => f.risk === "excesso");
+    const salesAtRisk =
+      Math.round(
+        atRisk.reduce((a, f) => {
+          const demand = f.dailySales * 7;
+          const shortfall = Math.max(0, demand - f.stock);
+          return a + shortfall * priceOf(f.productId);
+        }, 0) * 100,
+      ) / 100;
+    const capitalParado =
+      Math.round(
+        overstock.reduce((a, f) => {
+          const excess = Math.max(0, f.stock - f.minStock * 2);
+          return a + excess * costOf(f.productId);
+        }, 0) * 100,
+      ) / 100;
+    return {
+      salesAtRisk,
+      capitalParado,
+      atRiskCount: atRisk.length,
+      overstockCount: overstock.length,
+    };
   }
   // State mutations used by the demonstration
   function pushNotification(s, type, text) {
@@ -981,8 +1043,54 @@
       .toLowerCase()
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "");
+    if (/impacto|prejuizo|perdendo/.test(q)) {
+      const b = businessImpact(s);
+      return (
+        "Impacto financeiro estimado da gestão de estoque:\n\n" +
+        (b.atRiskCount
+          ? "⚠ " +
+            brl(b.salesAtRisk) +
+            " em vendas dos próximos 7 dias em risco, por causa de " +
+            b.atRiskCount +
+            " produto(s) perto da ruptura."
+          : "✓ Nenhuma venda em risco de ruptura nos próximos 7 dias.") +
+        "\n" +
+        (b.overstockCount
+          ? "📦 " +
+            brl(b.capitalParado) +
+            " de capital parado em " +
+            b.overstockCount +
+            " produto(s) com baixo giro."
+          : "✓ Nenhum produto com estoque parado no momento.") +
+        "\n\nGerar pedidos de compra para os produtos em risco e liquidar os parados libera caixa para reinvestir."
+      );
+    }
+    if (/parad[oa]|encalhad[oa]|excesso|liquidaca[o]/.test(q)) {
+      const overstock = forecast(s).filter((f) => f.risk === "excesso");
+      return overstock.length
+        ? "Produtos com estoque parado (baixo giro nos últimos dias):\n\n" +
+            overstock
+              .map(
+                (f) =>
+                  f.name +
+                  " — " +
+                  f.stock +
+                  " unidades" +
+                  (f.daysToStockout !== null
+                    ? " · cobertura de ~" + f.daysToStockout + " dias"
+                    : " · sem vendas registradas") +
+                  " · sugestão: liquidação de " +
+                  f.suggestedDiscount +
+                  "%.",
+              )
+              .join("\n") +
+            "\n\nLiberar esse capital parado ajuda a financiar a reposição dos produtos em risco de ruptura."
+        : "Nenhum produto com estoque parado no momento.";
+    }
     if (/estoque|ruptura/.test(q)) {
-      const risk = forecast(s).filter((f) => f.risk !== "ok");
+      const risk = forecast(s).filter(
+        (f) => f.risk === "critico" || f.risk === "atencao",
+      );
       return risk.length
         ? "Previsão de ruptura com base no ritmo de vendas de hoje:\n\n" +
             risk
@@ -1122,7 +1230,8 @@
           .join("\n") +
         "\n\nComece pela reposição dos produtos com estoque baixo."
       );
-    if (/resum|operacao|hoje|vendas/.test(q))
+    if (/resum|operacao|hoje|vendas/.test(q)) {
+      const b = businessImpact(s);
       return (
         "Hoje sua operação registrou " +
         m.orders +
@@ -1144,15 +1253,24 @@
         (m.openPurchaseOrders
           ? m.openPurchaseOrders +
             " pedido(s) de compra em andamento com fornecedores."
-          : "Nenhum pedido de compra em aberto no momento.")
+          : "Nenhum pedido de compra em aberto no momento.") +
+        (b.salesAtRisk || b.capitalParado
+          ? "\n\nImpacto financeiro: " +
+            (b.salesAtRisk ? brl(b.salesAtRisk) + " em vendas em risco" : "") +
+            (b.salesAtRisk && b.capitalParado ? " e " : "") +
+            (b.capitalParado ? brl(b.capitalParado) + " de capital parado" : "") +
+            ". Pergunte “Qual o impacto financeiro do estoque?” para detalhes."
+          : "")
       );
-    return "Nesta demonstração, consigo analisar estoque e previsão de ruptura, produtos que precisam de atenção, vendas, erros nos anúncios, pedidos aguardando separação, pedidos de compra a fornecedores, divergências de inventário e o financeiro (lucro e despesas). Escolha uma sugestão ou peça: “Resuma minha operação.”";
+    }
+    return "Nesta demonstração, consigo analisar estoque e previsão de ruptura, produtos parados (baixo giro), vendas, erros nos anúncios, pedidos aguardando separação, pedidos de compra a fornecedores, divergências de inventário, o financeiro (lucro e despesas) e o impacto financeiro da gestão de estoque. Escolha uma sugestão ou peça: “Resuma minha operação.”";
   }
   // Public API for the interface and automated tests
   const api = {
     seed,
     metrics,
     forecast,
+    businessImpact,
     sell,
     publish,
     answer,

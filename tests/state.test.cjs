@@ -78,6 +78,14 @@ test("sete áreas, separação de pedido e etapas de anúncio renderizam sem err
       },
       setItem() {},
     },
+    sessionStorage: {
+      getItem() {
+        return "1";
+      },
+      setItem() {},
+      removeItem() {},
+    },
+    navigator: { mediaDevices: undefined },
     location: { hash: "" },
     window: { addEventListener() {}, scrollTo() {} },
     setTimeout,
@@ -86,6 +94,7 @@ test("sete áreas, separação de pedido e etapas de anúncio renderizam sem err
     FileReader: class {},
   };
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync("dist/qrcode.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dist/app.js", "utf8"), context);
   for (const route of [
     "dashboard",
@@ -112,6 +121,10 @@ test("sete áreas, separação de pedido e etapas de anúncio renderizam sem err
     context,
   );
   assert.ok(app.innerHTML.includes("NOTA FISCAL"));
+  assert.ok(
+    app.innerHTML.includes("<svg"),
+    "NF deve mostrar um QR code real (vendorizado, sem serviço externo)",
+  );
   assert.ok(!app.innerHTML.includes("undefined"));
   vm.runInContext("docModal=null;render()", context);
   vm.runInContext("modal='p0';render()", context);
@@ -119,6 +132,8 @@ test("sete áreas, separação de pedido e etapas de anúncio renderizam sem err
   vm.runInContext("modal=null;fulfillmentModal='SEP-2201';render()", context);
   assert.ok(app.innerHTML.includes("SEP-2201"));
   assert.ok(app.innerHTML.includes("Bipar código do item"));
+  assert.ok(app.innerHTML.includes("Rota de separação sugerida"));
+  assert.ok(app.innerHTML.includes("Corredor"));
   vm.runInContext("fulfillmentModal=null;render()", context);
   vm.runInContext(
     "page='one';draft={name:'Teste',description:'Descrição',price:100};selected=['ml'];ads=[{channel:'ml',title:'Teste',description:'Descrição',warning:'GTIN não informado.',fixed:false}];oneStage=2;render()",
@@ -127,6 +142,55 @@ test("sete áreas, separação de pedido e etapas de anúncio renderizam sem err
   assert.ok(app.innerHTML.includes("Corrigir com WedTech AI"));
   vm.runInContext("ads[0].fixed=true;oneStage=3;render()", context);
   assert.ok(app.innerHTML.includes('data-action="publish"'));
+});
+test("login: tela de acesso, sem sessão renderiza login; após logar mostra o app; tour aparece uma vez", () => {
+  const app = { innerHTML: "" };
+  const doc = {
+    querySelector: (s) => (s === "#app" ? app : null),
+    body: { style: {} },
+    addEventListener() {},
+  };
+  const store = new Map();
+  const context = {
+    WedTech: N,
+    document: doc,
+    localStorage: {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+    },
+    sessionStorage: {
+      getItem() {
+        return null;
+      },
+      setItem() {},
+      removeItem() {},
+    },
+    navigator: { mediaDevices: undefined },
+    location: { hash: "" },
+    window: { addEventListener() {}, scrollTo() {} },
+    setTimeout,
+    clearTimeout,
+    console,
+    FileReader: class {},
+  };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync("dist/qrcode.js", "utf8"), context);
+  vm.runInContext(fs.readFileSync("dist/app.js", "utf8"), context);
+  assert.ok(app.innerHTML.includes('id="login-form"'));
+  assert.ok(app.innerHTML.includes("E-mail"));
+  assert.ok(!app.innerHTML.includes("Visão geral"));
+  vm.runInContext("loggedIn=true;tourStep=0;render()", context);
+  assert.ok(app.innerHTML.includes("Visão geral"));
+  assert.ok(app.innerHTML.includes("Bem-vindo ao WedTech"));
+  vm.runInContext("tourStep=null;render()", context);
+  assert.ok(!app.innerHTML.includes('class="tour-card"'));
+  vm.runInContext("page='estoque';render()", context);
+  assert.ok(app.innerHTML.includes('data-action="export-estoque-csv"'));
+  assert.ok(app.innerHTML.includes("Estoque parado"));
+  assert.ok(!app.innerHTML.includes("undefined"));
+  vm.runInContext("page='config';render()", context);
+  assert.ok(app.innerHTML.includes("Galpão Principal"));
+  assert.ok(!app.innerHTML.includes("undefined"));
 });
 test("leitor IoT: saída dá baixa por SKU, entrada soma por código de barras", () => {
   const s = N.seed();
@@ -192,17 +256,31 @@ test("novo pedido entra na fila e cadastro de loja valida nome e CNPJ", () => {
   );
   assert.throws(() => N.addStore(s, { name: "", cnpj: "" }), /nome e CNPJ/i);
 });
-test("previsão de ruptura identifica produtos em risco", () => {
+test("previsão identifica risco de ruptura e estoque parado (excesso)", () => {
   const s = N.seed();
-  const risk = N.forecast(s).filter((f) => f.risk !== "ok");
+  const all = N.forecast(s);
+  const ruptura = all.filter((f) => f.risk === "critico" || f.risk === "atencao");
+  const excesso = all.filter((f) => f.risk === "excesso");
   assert.deepEqual(
-    risk.map((f) => f.productId).sort(),
+    ruptura.map((f) => f.productId).sort(),
     ["p0", "p8"],
   );
+  assert.deepEqual(
+    excesso.map((f) => f.productId).sort(),
+    ["p2", "p4", "p7", "p9"],
+  );
+  assert.ok(excesso.every((f) => f.suggestedDiscount >= 10 && f.suggestedDiscount <= 30));
   assert.match(
     N.answer(s, "Tenho risco de ficar sem estoque?"),
     /Nike Revolution 8.*esgota em/s,
   );
+  assert.match(N.answer(s, "Tenho produtos parados?"), /Mouse Gamer G500.*liquidação/s);
+  const b = N.businessImpact(s);
+  assert.equal(b.atRiskCount, 2);
+  assert.equal(b.overstockCount, 4);
+  assert.ok(b.salesAtRisk > 0);
+  assert.ok(b.capitalParado > 0);
+  assert.match(N.answer(s, "Qual o impacto financeiro do estoque?"), /vendas.*em risco/is);
 });
 test("pedidos de compra: geração automática, envio e recebimento repõem o estoque", () => {
   const s = N.seed();
@@ -308,6 +386,14 @@ test("dashboard destaca o WedTech AI e oferece navegação acessível", () => {
       },
       setItem() {},
     },
+    sessionStorage: {
+      getItem() {
+        return "1";
+      },
+      setItem() {},
+      removeItem() {},
+    },
+    navigator: { mediaDevices: undefined },
     location: { hash: "#dashboard" },
     window: { addEventListener() {}, scrollTo() {} },
     setTimeout,
