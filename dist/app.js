@@ -1,7 +1,43 @@
 "use strict";
 
 // Shared helpers and application state
-const { seed, metrics, sell, publish, answer, channels } = WedTech;
+const {
+  seed,
+  metrics,
+  sell,
+  publish,
+  answer,
+  channels,
+  fulfillmentStatus,
+  scanSale,
+  scanReceive,
+  newFulfillment,
+  scanFulfillmentItem,
+  confirmSeparation,
+  dispatchFulfillment,
+  addStore,
+} = WedTech;
+// Operadores ilustrativos do painel de configurações (sem autenticação real)
+const operators = [
+  {
+    initials: "AC",
+    name: "Ana Clara Souza",
+    role: "Administradora",
+    store: "Loja Tatuapé",
+  },
+  {
+    initials: "RM",
+    name: "Rafael Mendes",
+    role: "Operador de estoque",
+    store: "CD Guarulhos",
+  },
+  {
+    initials: "JP",
+    name: "João Pedro Lima",
+    role: "Vendedor",
+    store: "Loja Tatuapé",
+  },
+];
 const $ = (s) => document.querySelector(s),
   money = (n) =>
     new Intl.NumberFormat("pt-BR", {
@@ -47,13 +83,20 @@ let page = "dashboard",
   ads = [],
   draft = blank(),
   syncText = "",
-  publishedId = null;
+  publishedId = null,
+  scanMode = "saida",
+  scanStoreId = "st1",
+  scanFeedback = null,
+  fulfillmentModal = null,
+  fulfillmentFeedback = "",
+  storeFormOpen = false;
 function blank() {
   return {
     name: "",
     brand: "",
     category: "Calçados",
     sku: "",
+    barcode: "",
     price: "",
     stock: "",
     description: "",
@@ -66,8 +109,10 @@ const routes = {
   dashboard: "Dashboard",
   produtos: "Produtos",
   one: "WedTech One",
+  estoque: "Estoque Inteligente",
   marketplaces: "Marketplaces",
   ai: "WedTech AI",
+  config: "Configurações",
 };
 const paths = {
   dashboard:
@@ -75,8 +120,11 @@ const paths = {
   produtos:
     '<path d="m3 7 9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10M7 5l10 5"/>',
   one: '<path d="M12 3v18M3 12h18M5 5l14 14M19 5 5 19"/>',
+  estoque: '<path d="M3 5v14M7 5v14M10 5v14M14 5v14M17 5v14M21 5v14"/>',
   marketplaces: '<path d="M4 10v11h16V10M3 4h18l1 6H2zM9 21v-7h6v7"/>',
   ai: '<path d="m12 2 3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/>',
+  config:
+    '<circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4M4.2 4.2l2.9 2.9m9.8 9.8 2.9 2.9M2 12h4m12 0h4M4.2 19.8l2.9-2.9m9.8-9.8 2.9-2.9"/>',
   sale: '<path d="M3 17 8 12l4 3 8-11M15 4h5v5"/>',
   orders: '<path d="M5 3h14v18l-3-2-4 2-4-2-3 2zM9 7h6M9 11h6"/>',
   stock: '<path d="M3 8h18v13H3zM5 3h14v5M9 12h6"/>',
@@ -155,12 +203,12 @@ function render() {
     )
       .map(
         ([id, name]) =>
-          `<a href="#${id}" class="${page === id ? "active" : ""}" ${page === id ? 'aria-current="page"' : ""}>${icon(id)}${name}${id === "ai" ? '<span class="badge" style="margin-left:auto;padding:3px 5px;font-size:10px">AI</span>' : ""}</a>`,
+          `<a href="#${id}" class="${page === id ? "active" : ""}" ${page === id ? 'aria-current="page"' : ""}>${icon(id)}${name}${id === "ai" ? '<span class="badge" style="margin-left:auto;padding:3px 5px;font-size:10px">AI</span>' : id === "estoque" && m.pendingSeparations ? `<span class="badge" style="margin-left:auto;padding:3px 5px;font-size:10px">${m.pendingSeparations}</span>` : ""}</a>`,
       )
       .join(
         "",
-      )}</nav><div class="sidebar-bottom"><div class="side-note"><b>Uma operação. Mais possibilidades.</b><br>Um produto. Todos os canais.<br>Uma única inteligência.</div><div><span class="dot"></span>Modo Demonstração</div><div style="margin:10px 0;color:#8fa3bb">Protótipo Hackathon · v0.1</div><button class="link" style="color:#9fc7f3;padding:8px 0" data-action="reset">↺ Reiniciar demonstração</button></div></aside>${menu ? '<button type="button" class="sidebar-backdrop" data-action="menu" aria-label="Fechar menu lateral"></button>' : ""}<div class="workspace"><header class="topbar"><div class="crumb"><button class="mobile-menu" aria-label="Abrir menu" data-action="menu">☰</button><span class="muted">Workspace</span><span class="separator muted">/</span><span>${routes[page]}</span></div><div class="top-right">${badge('<span class="dot"></span>Demonstração', "neutral")}<span class="store-name">Minha loja</span><span class="avatar">ML</span></div></header><main id="main-content" tabindex="-1">${page === "dashboard" ? dashboard(m) : page === "produtos" ? catalog() : page === "one" ? one() : page === "marketplaces" ? markets() : ai(m)}</main></div></div>${modal ? detail() : ""}<dialog class="reset-dialog" id="reset-dialog"><h2>Recomeçar a apresentação?</h2><p>As alterações simuladas serão apagadas e os dados iniciais serão restaurados.</p><div class="actions"><button class="btn" data-action="cancel-reset">Cancelar</button><button class="btn primary" data-action="confirm-reset">Reiniciar</button></div></dialog>`;
-  if (modal) {
+      )}</nav><div class="sidebar-bottom"><div class="side-note"><b>Uma operação. Mais possibilidades.</b><br>Um produto. Todos os canais.<br>Uma única inteligência.</div><div><span class="dot"></span>Modo Demonstração</div><div style="margin:10px 0;color:#8fa3bb">Protótipo Hackathon · v0.1</div><button class="link" style="color:#9fc7f3;padding:8px 0" data-action="reset">↺ Reiniciar demonstração</button></div></aside>${menu ? '<button type="button" class="sidebar-backdrop" data-action="menu" aria-label="Fechar menu lateral"></button>' : ""}<div class="workspace"><header class="topbar"><div class="crumb"><button class="mobile-menu" aria-label="Abrir menu" data-action="menu">☰</button><span class="muted">Workspace</span><span class="separator muted">/</span><span>${routes[page]}</span></div><div class="top-right">${badge('<span class="dot"></span>Demonstração', "neutral")}<span class="store-name">Minha loja</span><span class="avatar">ML</span></div></header><main id="main-content" tabindex="-1">${page === "dashboard" ? dashboard(m) : page === "produtos" ? catalog() : page === "one" ? one() : page === "estoque" ? iotPage(m) : page === "marketplaces" ? markets() : page === "config" ? configPage() : ai(m)}</main></div></div>${modal ? detail() : ""}${fulfillmentModal ? fulfillmentDetail() : ""}<dialog class="reset-dialog" id="reset-dialog"><h2>Recomeçar a apresentação?</h2><p>As alterações simuladas serão apagadas e os dados iniciais serão restaurados.</p><div class="actions"><button class="btn" data-action="cancel-reset">Cancelar</button><button class="btn primary" data-action="confirm-reset">Reiniciar</button></div></dialog>`;
+  if (modal || fulfillmentModal) {
     document.body.style.overflow = "hidden";
     $(".close")?.focus();
   } else document.body.style.overflow = "";
@@ -274,7 +322,7 @@ function catalog() {
       "Um único cadastro. Estoque e informações em sintonia.",
       `<button class="btn primary" data-action="new">+ Novo Produto</button>`,
     ) +
-    `<div class="toolbar"><input class="search" type="search" id="search" placeholder="Buscar por produto ou SKU..." aria-label="Buscar produtos" value="${esc(query)}"></div><section class="card table-wrap"><table><thead><tr><th>Produto</th><th>SKU</th><th>Preço</th><th>Estoque</th><th>Marketplaces</th><th>Status</th></tr></thead><tbody>${products.map((p) => `<tr><td><div class="product-name"><span class="product-icon">${p.image ? `<img src="${esc(p.image)}" alt="" style="width:38px;height:38px;object-fit:contain">` : icon(p.icon)}</span><button class="product-button" data-product="${p.id}">${esc(p.name)}<small>${esc(p.brand)} · ${esc(p.category)}</small></button></div></td><td class="muted">${esc(p.sku)}</td><td>${money(p.price)}</td><td><b style="color:${p.stock < 20 ? "#b67730" : "inherit"}">${p.stock}</b><small>${p.stock < 20 ? "Estoque baixo" : "unidades"}</small></td><td><div class="mini-channels">${p.channels.map(logo).join("")}</div></td><td>${badge(p.issue ? "Atenção" : "Ativo", p.issue ? "warn" : "")}</td></tr>`).join("")}</tbody></table>${products.length ? "" : '<div class="empty">Nenhum produto encontrado.</div>'}<div class="table-footer">${products.length} de ${state.products.length} produtos · Catálogo demonstrativo completo</div></section><div class="ai-strip" style="margin-top:24px"><span class="spark">✧</span><div><h2>Um estoque que acompanha suas vendas.</h2><p>Abra Nike Revolution 8 e simule uma venda para ver a sincronização entre os canais.</p></div><button class="link" data-product="p0">Experimentar →</button></div>`
+    `<div class="toolbar"><input class="search" type="search" id="search" placeholder="Buscar por produto ou SKU..." aria-label="Buscar produtos" value="${esc(query)}"></div><section class="card table-wrap"><table><thead><tr><th>Produto</th><th>SKU</th><th>Preço</th><th>Estoque</th><th>Marketplaces</th><th>Status</th></tr></thead><tbody>${products.map((p) => `<tr><td><div class="product-name"><span class="product-icon">${p.image ? `<img src="${esc(p.image)}" alt="" style="width:38px;height:38px;object-fit:contain">` : icon(p.icon)}</span><button class="product-button" data-product="${p.id}">${esc(p.name)}<small>${esc(p.brand)} · ${esc(p.category)}</small></button></div></td><td class="muted">${esc(p.sku)}${p.barcode ? `<small>EAN ${esc(p.barcode)}</small>` : ""}</td><td>${money(p.price)}</td><td><b style="color:${p.stock < 20 ? "#b67730" : "inherit"}">${p.stock}</b><small>${p.stock < 20 ? "Estoque baixo" : "unidades"}</small></td><td><div class="mini-channels">${p.channels.map(logo).join("")}</div></td><td>${badge(p.issue ? "Atenção" : "Ativo", p.issue ? "warn" : "")}</td></tr>`).join("")}</tbody></table>${products.length ? "" : '<div class="empty">Nenhum produto encontrado.</div>'}<div class="table-footer">${products.length} de ${state.products.length} produtos · Catálogo demonstrativo completo</div></section><div class="ai-strip" style="margin-top:24px"><span class="spark">✧</span><div><h2>Um estoque que acompanha suas vendas.</h2><p>Abra Nike Revolution 8 e simule uma venda para ver a sincronização entre os canais.</p></div><button class="link" data-product="p0">Experimentar →</button></div>`
   );
 }
 function detail() {
@@ -283,7 +331,7 @@ function detail() {
   const count = state.orders
     .filter((o) => o.productId === p.id)
     .reduce((a, o) => a + o.quantity, 0);
-  return `<div class="modal-overlay"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title"><div class="drawer-top"><span class="wedtech-label">CATÁLOGO CENTRAL</span><button class="close" data-action="close" aria-label="Fechar detalhes">×</button></div><div class="product-icon" style="width:64px;height:64px;margin-bottom:20px">${p.image ? `<img class="image-preview" src="${esc(p.image)}" alt="${esc(p.name)}">` : icon(p.icon)}</div><h1 id="detail-title">${esc(p.name)}</h1><p class="muted" style="font-size:14px;margin-top:10px">${esc(p.sku)} · ${esc(p.brand)} · ${esc(p.category)}</p><div class="detail-stats"><div><small>Preço</small><strong>${money(p.price)}</strong></div><div><small>Estoque</small><strong>${p.stock} un.</strong></div><div><small>Vendidos hoje</small><strong>${count}</strong></div></div><p style="font-size:14px">${esc(p.description)}</p><p class="caption">${esc(p.features)}</p><div class="sync-box"><div class="section-head" style="margin-bottom:10px"><h2>Estoque em tempo real</h2>${badge("Simulação", "neutral")}</div><p aria-live="polite">${syncText || "Um único saldo, atualizado em todos os canais."}</p>${channels.map((c) => `<div class="sync-channel"><span>${c.name}</span><span>${p.channels.includes(c.id) ? `<b>${p.stock}</b> ${busy ? "sincronizando…" : "✓ Publicado"}` : "Não publicado"}</span></div>`).join("")}<button class="btn primary" style="width:100%;margin-top:18px" data-action="sell" ${busy || p.stock < 1 ? "disabled" : ""}>${busy ? '<span class="spin"></span>Sincronizando estoque...' : p.stock < 1 ? "Estoque esgotado" : "Simular venda"}</button></div><div class="ai-strip" style="align-items:flex-start"><span class="spark">✧</span><div><h2>Análise do WedTech AI</h2><p>${p.stock < 20 ? "Estoque próximo da ruptura. Restam " + p.stock + " unidades. Planeje a reposição." : p.issue ? "O título na Shopee ultrapassa a recomendação desta demonstração." : p.slow ? "Vendas abaixo da média histórica. Revise o anúncio e avalie uma campanha." : "Estoque saudável. Continue acompanhando as vendas entre os canais."}</p></div></div>${p.issue ? `<button class="btn primary" data-action="fix-product" ${busy ? "disabled" : ""}>${busy ? "Corrigindo..." : "✧ Corrigir anúncio com WedTech AI"}</button>` : ""}<h3 style="margin-top:24px">Últimas vendas simuladas</h3>${
+  return `<div class="modal-overlay"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title"><div class="drawer-top"><span class="wedtech-label">CATÁLOGO CENTRAL</span><button class="close" data-action="close" aria-label="Fechar detalhes">×</button></div><div class="product-icon" style="width:64px;height:64px;margin-bottom:20px">${p.image ? `<img class="image-preview" src="${esc(p.image)}" alt="${esc(p.name)}">` : icon(p.icon)}</div><h1 id="detail-title">${esc(p.name)}</h1><p class="muted" style="font-size:14px;margin-top:10px">${esc(p.sku)} · ${esc(p.brand)} · ${esc(p.category)}${p.barcode ? " · EAN " + esc(p.barcode) : ""}</p><div class="detail-stats"><div><small>Preço</small><strong>${money(p.price)}</strong></div><div><small>Estoque</small><strong>${p.stock} un.</strong></div><div><small>Vendidos hoje</small><strong>${count}</strong></div></div><p style="font-size:14px">${esc(p.description)}</p><p class="caption">${esc(p.features)}</p><div class="sync-box"><div class="section-head" style="margin-bottom:10px"><h2>Estoque em tempo real</h2>${badge("Simulação", "neutral")}</div><p aria-live="polite">${syncText || "Um único saldo, atualizado em todos os canais."}</p>${channels.map((c) => `<div class="sync-channel"><span>${c.name}</span><span>${p.channels.includes(c.id) ? `<b>${p.stock}</b> ${busy ? "sincronizando…" : "✓ Publicado"}` : "Não publicado"}</span></div>`).join("")}<button class="btn primary" style="width:100%;margin-top:18px" data-action="sell" ${busy || p.stock < 1 ? "disabled" : ""}>${busy ? '<span class="spin"></span>Sincronizando estoque...' : p.stock < 1 ? "Estoque esgotado" : "Simular venda"}</button></div><div class="ai-strip" style="align-items:flex-start"><span class="spark">✧</span><div><h2>Análise do WedTech AI</h2><p>${p.stock < 20 ? "Estoque próximo da ruptura. Restam " + p.stock + " unidades. Planeje a reposição." : p.issue ? "O título na Shopee ultrapassa a recomendação desta demonstração." : p.slow ? "Vendas abaixo da média histórica. Revise o anúncio e avalie uma campanha." : "Estoque saudável. Continue acompanhando as vendas entre os canais."}</p></div></div>${p.issue ? `<button class="btn primary" data-action="fix-product" ${busy ? "disabled" : ""}>${busy ? "Corrigindo..." : "✧ Corrigir anúncio com WedTech AI"}</button>` : ""}<h3 style="margin-top:24px">Últimas vendas simuladas</h3>${
     state.orders
       .filter((o) => o.productId === p.id)
       .slice(-3)
@@ -316,13 +364,14 @@ function one() {
         ["name", "Nome do produto", "text"],
         ["brand", "Marca", "text"],
         ["sku", "SKU", "text"],
+        ["barcode", "Código de barras (EAN)", "text"],
         ["category", "Categoria", "text"],
         ["price", "Preço (R$)", "number"],
         ["stock", "Estoque", "number"],
       ]
         .map(
           ([key, label, type]) =>
-            `<div class="field ${key === "name" ? "full" : ""}"><label for="${key}">${label}</label><input id="${key}" name="${key}" type="${type}" value="${esc(draft[key])}" required ${type === "number" ? `min="${key === "price" ? ".01" : "0"}" max="${key === "price" ? "9999999" : "999999"}" step="${key === "price" ? ".01" : "1"}"` : 'maxlength="120"'}></div>`,
+            `<div class="field ${key === "name" ? "full" : ""}"><label for="${key}">${label}${key === "barcode" ? ' <span class="muted">(opcional)</span>' : ""}</label><input id="${key}" name="${key}" type="${type}" value="${esc(draft[key])}" ${key === "barcode" ? "" : "required"} ${type === "number" ? `min="${key === "price" ? ".01" : "0"}" max="${key === "price" ? "9999999" : "999999"}" step="${key === "price" ? ".01" : "1"}"` : 'maxlength="120"'}></div>`,
         )
         .join(
           "",
@@ -377,6 +426,128 @@ function markets() {
       )}</div><div class="ai-strip" style="margin-top:24px"><span class="spark">✧</span><div><h2>Mais canais, o mesmo catálogo.</h2><p>Ao publicar com WedTech One, os anúncios passam a compartilhar as informações e o saldo do produto.</p></div><a class="link" href="#one">Abrir WedTech One →</a></div>`
   );
 }
+// Estoque Inteligente — leitor IoT (entrada/saída física) e separação de pedidos
+function iotPage(m) {
+  const store = state.stores.find((s) => s.id === scanStoreId) || state.stores[0];
+  const active = state.fulfillments.filter((f) => f.status !== "shipped");
+  const shipped = state.fulfillments.filter((f) => f.status === "shipped").slice(0, 3);
+  const kpis = [
+    ["Leituras hoje", state.scanLog.length, "Registradas pelo leitor IoT", "estoque"],
+    ["Aguardando separação", m.pendingSeparations, "Pedidos de marketplace na fila", "orders"],
+    ["Estoque baixo", state.products.filter((p) => p.stock < 20).length, "Produtos abaixo de 20 un.", "stock"],
+    ["Lojas conectadas", state.stores.length, "Lojas e centros de distribuição", "marketplaces"],
+  ];
+  return (
+    heading(
+      "Estoque Inteligente",
+      "Leitor de código de barras, separação de pedidos e rastreabilidade em tempo real.",
+      `<button class="btn" data-action="new-order" ${busy ? "disabled" : ""}>+ Simular pedido de marketplace</button>`,
+    ) +
+    `<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">${kpis
+      .map(
+        (k) =>
+          `<div class="card kpi"><div class="kpi-label">${icon(k[3])}${k[0]}</div><strong>${k[1]}</strong><small>${k[2]}</small></div>`,
+      )
+      .join(
+        "",
+      )}</div><div class="chart-grid"><section class="card"><div class="section-head"><div><h2>Leitor de código de barras</h2><p>Simule a leitura de um SKU ou código de barras na loja física.</p></div>${badge("🟢 Leitor conectado")}</div><div class="field" style="margin-bottom:18px"><label for="scan-store">Loja / unidade</label><select id="scan-store">${state.stores
+      .map(
+        (s) =>
+          `<option value="${s.id}" ${s.id === scanStoreId ? "selected" : ""}>${esc(s.name)}</option>`,
+      )
+      .join(
+        "",
+      )}</select></div><div class="actions" style="margin-bottom:18px"><button type="button" class="btn ${scanMode === "saida" ? "primary" : ""}" data-action="scan-mode-saida">↗ Saída (venda balcão)</button><button type="button" class="btn ${scanMode === "entrada" ? "primary" : ""}" data-action="scan-mode-entrada">↘ Entrada (recebimento)</button></div><form id="scan-form" style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap"><div class="field" style="flex:1;min-width:180px"><label for="scan-code">Código de barras ou SKU</label><input id="scan-code" name="code" placeholder="Ex.: 7891234500001 ou NK-RV8-001" autocomplete="off" required></div>${
+      scanMode === "entrada"
+        ? '<div class="field" style="width:90px"><label for="scan-qty">Qtd.</label><input id="scan-qty" name="qty" type="number" min="1" max="9999" value="1"></div>'
+        : ""
+    }<button class="btn primary" ${busy ? "disabled" : ""}>${busy ? "Bipando…" : "✧ Bipar"}</button></form><p class="caption">Loja selecionada: ${esc(store?.name || "—")}. A leitura simula um leitor IoT (RFID/código de barras) conectado ao estoque central.</p>${
+      scanFeedback
+        ? `<div class="validation ${scanFeedback.type === "ok" ? "ok" : ""}">${scanFeedback.type === "ok" ? "✓ " : "⚠ "}${esc(scanFeedback.text)}</div>`
+        : ""
+    }</section><section class="card"><div class="section-head"><h2>Histórico de leituras</h2><span class="muted" style="font-size:12px">${state.scanLog.length} registradas</span></div>${
+      state.scanLog.length
+        ? state.scanLog
+            .slice(0, 8)
+            .map(
+              (l) =>
+                `<div class="channel-row"><span>${l.type === "entrada" ? "↘" : l.type === "saida" ? "↗" : "📦"}</span><div>${esc(l.product)}<div class="muted" style="font-size:12px">${esc(l.sku)} · ${esc(l.store)}</div></div>${badge(l.type === "entrada" ? "Entrada" : l.type === "saida" ? "Saída" : "Separação", l.type === "saida" ? "" : l.type === "entrada" ? "neutral" : "warn")}</div>`,
+            )
+            .join("")
+        : '<div class="empty">Nenhuma leitura registrada ainda. Bipe um código para começar.</div>'
+    }</section></div><section class="card" style="margin-top:22px"><div class="section-head"><div><h2>Fila de separação</h2><p>Pedidos recebidos nos marketplaces, aguardando conferência física por leitura.</p></div>${badge(active.length + " em aberto")}</div>${
+      active.length
+        ? `<div class="table-wrap"><table><thead><tr><th>Pedido</th><th>Canal</th><th>Itens</th><th>Recebido</th><th>Status</th><th></th></tr></thead><tbody>${active
+            .map(
+              (f) =>
+                `<tr><td><b>${f.id}</b></td><td>${logo(f.channel)}</td><td>${f.items.length} item(ns) · ${f.items.filter((it) => it.scanned).length}/${f.items.length} bipados</td><td class="muted">${esc(f.createdAt)}</td><td>${badge(fulfillmentStatus[f.status], f.status === "pending" ? "neutral" : f.status === "separating" ? "warn" : "")}</td><td>${
+                  f.status === "separated"
+                    ? `<button class="btn primary" data-dispatch="${f.id}" ${busy ? "disabled" : ""}>Despachar</button>`
+                    : `<button class="btn" data-fulfillment="${f.id}">${f.status === "separating" ? "Continuar separação" : "Separar pedido"}</button>`
+                }</td></tr>`,
+            )
+            .join("")}</tbody></table></div>`
+        : '<div class="empty">Nenhum pedido aguardando separação. Simule um novo pedido para ver o fluxo.</div>'
+    }${shipped.length ? `<p class="caption">Últimos despachados: ${shipped.map((f) => f.id).join(", ")}.</p>` : ""}</section><div class="ai-strip" style="margin-top:22px"><span class="spark">✧</span><div><h2>IoT + IA + automação, juntas.</h2><p>Cada leitura sincroniza o estoque em todos os canais e alimenta o WedTech AI com dados em tempo real.</p></div><a class="link" href="#ai">Conversar com WedTech AI ↗</a></div>`
+  );
+}
+// Modal de separação: bipagem item a item com conferência contra o pedido
+function fulfillmentDetail() {
+  const f = state.fulfillments.find((f) => f.id === fulfillmentModal);
+  if (!f) return "";
+  const done = f.items.every((it) => it.scanned);
+  return `<div class="modal-overlay"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="fulfillment-title"><div class="drawer-top"><span class="wedtech-label">SEPARAÇÃO DE PEDIDO</span><button class="close" data-action="close-fulfillment" aria-label="Fechar separação">×</button></div><h1 id="fulfillment-title">${esc(f.id)}</h1><p class="muted" style="font-size:14px;margin-top:10px">${logo(f.channel)} ${esc(channels.find((c) => c.id === f.channel)?.name || "")} · Recebido ${esc(f.createdAt)}</p><div style="margin-top:16px">${badge(fulfillmentStatus[f.status], f.status === "pending" ? "neutral" : f.status === "separating" ? "warn" : "")}</div><h3 style="margin-top:24px;margin-bottom:12px">Itens do pedido</h3>${f.items
+    .map(
+      (it) =>
+        `<div class="channel-row"><span>${it.scanned ? "✓" : "○"}</span><div>${esc(it.name)}<div class="muted" style="font-size:12px">${esc(it.sku)} · Qtd. ${it.qty}</div></div>${badge(it.scanned ? "Bipado" : "Pendente", it.scanned ? "" : "neutral")}</div>`,
+    )
+    .join(
+      "",
+    )}${
+    f.status !== "separated" && f.status !== "shipped"
+      ? `<form id="fulfillment-scan-form" style="display:flex;align-items:flex-end;gap:12px;margin-top:18px"><div class="field" style="flex:1"><label for="fulfillment-scan-code">Bipar código do item</label><input id="fulfillment-scan-code" name="code" autocomplete="off" required placeholder="SKU ou código de barras"></div><button class="btn primary" ${busy ? "disabled" : ""}>${busy ? "Bipando…" : "✧ Bipar"}</button></form>${
+          fulfillmentFeedback ? `<div class="validation">⚠ ${esc(fulfillmentFeedback)}</div>` : ""
+        }<button class="btn primary" style="width:100%;margin-top:16px" data-action="confirm-separation" ${busy || !done ? "disabled" : ""}>${busy ? "Confirmando…" : "Confirmar separação"}</button>`
+      : f.status === "separated"
+        ? `<button class="btn primary" style="width:100%;margin-top:16px" data-action="dispatch-from-modal" ${busy ? "disabled" : ""}>${busy ? "Despachando…" : "Despachar pedido"}</button>`
+        : '<div class="validation ok" style="margin-top:16px">✓ Pedido despachado.</div>'
+  }<p class="caption">Cada bipagem confere o item físico contra o pedido do marketplace e só libera a etiqueta quando tudo bate — evitando erro de separação.</p></section></div>`;
+}
+// Configurações — empresa, lojas/CDs, produtos, canais e operadores
+function configPage() {
+  const c = state.company;
+  return (
+    heading(
+      "Configurações",
+      "Dados da empresa, lojas, produtos e canais em um único lugar.",
+    ) +
+    `<div class="bottom-grid"><section class="card"><div class="section-head"><h2>Dados da empresa</h2></div><form id="company-form" class="form-grid"><div class="field full"><label for="company-name">Razão social</label><input id="company-name" name="name" value="${esc(c.name)}" required maxlength="120"></div><div class="field"><label for="company-cnpj">CNPJ</label><input id="company-cnpj" name="cnpj" value="${esc(c.cnpj)}" required maxlength="20"></div><div class="field"><label for="company-ie">Inscrição Estadual</label><input id="company-ie" name="ie" value="${esc(c.ie)}" maxlength="30"></div><div class="field full"><button class="btn primary" type="submit">Salvar dados da empresa</button></div></form></section><section class="card"><div class="section-head"><h2>Canais conectados</h2><a class="link" href="#marketplaces">Gerenciar →</a></div>${channels
+      .filter((ch) => ch.id !== "lp")
+      .map(
+        (ch) =>
+          `<div class="channel-row">${logo(ch.id)}<div>${ch.name}</div>${badge(state.connected.includes(ch.id) ? "Conectado" : "Não conectado", state.connected.includes(ch.id) ? "" : "neutral")}</div>`,
+      )
+      .join(
+        "",
+      )}</section></div><section class="card" style="margin-top:22px"><div class="section-head"><div><h2>Lojas e centros de distribuição</h2><p>Cadastre onde o estoque físico é lido pelo leitor IoT.</p></div><button class="btn primary" data-action="toggle-store-form">${storeFormOpen ? "Cancelar" : "+ Nova loja"}</button></div>${
+      storeFormOpen
+        ? '<form id="store-form" class="form-grid" style="margin-bottom:22px"><div class="field"><label for="store-name">Nome</label><input id="store-name" name="name" required maxlength="80" placeholder="Ex.: Loja Vila Mariana"></div><div class="field"><label for="store-type">Tipo</label><select id="store-type" name="type"><option value="loja">Loja física</option><option value="cd">Centro de distribuição</option></select></div><div class="field"><label for="store-cnpj">CNPJ</label><input id="store-cnpj" name="cnpj" required maxlength="20" placeholder="00.000.000/0000-00"></div><div class="field"><label for="store-address">Endereço</label><input id="store-address" name="address" maxlength="140"></div><div class="field full"><button class="btn primary" type="submit">Cadastrar loja</button></div></form>'
+        : ""
+    }<div class="table-wrap"><table><thead><tr><th>Loja</th><th>Tipo</th><th>CNPJ</th><th>Endereço</th><th>Status</th></tr></thead><tbody>${state.stores
+      .map(
+        (s) =>
+          `<tr><td><b>${esc(s.name)}</b></td><td class="muted">${s.type === "cd" ? "Centro de distribuição" : "Loja física"}</td><td class="muted">${esc(s.cnpj)}</td><td class="muted">${esc(s.address)}</td><td>${badge(s.active ? "Ativa" : "Inativa", s.active ? "" : "neutral")}</td></tr>`,
+      )
+      .join(
+        "",
+      )}</tbody></table></div></section><section class="card" style="margin-top:22px"><div class="section-head"><div><h2>Produtos</h2><p>Cadastro central de produtos, SKU e código de barras.</p></div><a class="link" href="#one">+ Novo produto →</a></div><div class="market-stats"><div><strong>${state.products.length}</strong><small>Produtos cadastrados</small></div><div><strong>${state.products.reduce((a, p) => a + p.stock, 0)}</strong><small>Unidades em estoque</small></div><div><strong>${state.products.filter((p) => p.barcode).length}</strong><small>Com código de barras</small></div></div><a class="link" href="#produtos">Abrir catálogo completo →</a></section><section class="card" style="margin-top:22px"><div class="section-head"><h2>Operadores</h2><span class="muted" style="font-size:12px">Ilustrativo · sem autenticação nesta demonstração</span></div>${operators
+      .map(
+        (o) =>
+          `<div class="channel-row"><span class="avatar">${o.initials}</span><div>${o.name}<div class="muted" style="font-size:12px">${o.role} · ${o.store}</div></div></div>`,
+      )
+      .join("")}</section>`
+  );
+}
 // WedTech AI
 const suggestions = [
   "Quais produtos precisam de atenção?",
@@ -413,6 +584,7 @@ function readDraft(form) {
     "name",
     "brand",
     "sku",
+    "barcode",
     "category",
     "price",
     "stock",
@@ -503,6 +675,99 @@ async function ask(q) {
     block: "nearest",
   });
 }
+// Leitor IoT: bipagem de saída (venda balcão) ou entrada (recebimento) na loja física
+async function handleScan(form) {
+  if (busy) return;
+  const code = form.elements.code.value;
+  const qty = form.elements.qty ? form.elements.qty.value : 1;
+  busy = true;
+  scanFeedback = null;
+  render();
+  await pause(500);
+  try {
+    if (scanMode === "saida") {
+      const { product } = scanSale(state, code, scanStoreId);
+      scanFeedback = {
+        type: "ok",
+        text:
+          "Venda registrada: " +
+          product.name +
+          ". Estoque sincronizado: " +
+          product.stock +
+          " unidades.",
+      };
+      toast("Leitura confirmada. Estoque sincronizado em todos os canais.");
+    } else {
+      const product = scanReceive(state, code, qty, scanStoreId);
+      scanFeedback = {
+        type: "ok",
+        text:
+          "Entrada registrada: " +
+          product.name +
+          ". Novo estoque: " +
+          product.stock +
+          " unidades.",
+      };
+      toast("Entrada de mercadoria registrada.");
+    }
+    save();
+  } catch (err) {
+    scanFeedback = { type: "error", text: err.message };
+  }
+  busy = false;
+  render();
+  $("#scan-code")?.focus();
+}
+// Bipagem de um item durante a separação de um pedido
+async function handleFulfillmentScan(form) {
+  if (busy || !fulfillmentModal) return;
+  const code = form.elements.code.value;
+  busy = true;
+  fulfillmentFeedback = "";
+  render();
+  await pause(400);
+  try {
+    scanFulfillmentItem(state, fulfillmentModal, code);
+    save();
+  } catch (err) {
+    fulfillmentFeedback = err.message;
+  }
+  busy = false;
+  render();
+  $("#fulfillment-scan-code")?.focus();
+}
+// Cadastro de loja/CD no painel de configurações
+function handleAddStore(form) {
+  try {
+    const store = addStore(state, {
+      name: form.elements.name.value,
+      type: form.elements.type.value,
+      cnpj: form.elements.cnpj.value,
+      address: form.elements.address.value,
+    });
+    save();
+    storeFormOpen = false;
+    toast("Nova loja cadastrada: " + store.name + ".");
+  } catch (err) {
+    toast(err.message);
+  }
+  render();
+}
+// Dados da empresa no painel de configurações
+function handleSaveCompany(form) {
+  const name = form.elements.name.value.trim(),
+    cnpj = form.elements.cnpj.value.trim(),
+    ie = form.elements.ie.value.trim();
+  if (!name || !cnpj) return toast("Informe nome e CNPJ da empresa.");
+  state.company = { name, cnpj, ie };
+  state.history.unshift({
+    text: "Dados da empresa atualizados",
+    time: "Agora",
+  });
+  save();
+  toast("Dados da empresa atualizados.");
+  render();
+}
 // DOM events
 document.addEventListener("submit", (e) => {
   if (e.target.id === "product-form") {
@@ -516,6 +781,22 @@ document.addEventListener("submit", (e) => {
   if (e.target.id === "dashboard-ai-form") {
     e.preventDefault();
     askDashboard(e.target.elements.question.value);
+  }
+  if (e.target.id === "scan-form") {
+    e.preventDefault();
+    handleScan(e.target);
+  }
+  if (e.target.id === "fulfillment-scan-form") {
+    e.preventDefault();
+    handleFulfillmentScan(e.target);
+  }
+  if (e.target.id === "store-form") {
+    e.preventDefault();
+    handleAddStore(e.target);
+  }
+  if (e.target.id === "company-form") {
+    e.preventDefault();
+    handleSaveCompany(e.target);
   }
 });
 document.addEventListener("input", (e) => {
@@ -539,6 +820,9 @@ document.addEventListener("change", (e) => {
       document.querySelectorAll('[name="channel"]:checked'),
     ).map((el) => el.value);
   }
+  if (e.target.id === "scan-store") {
+    scanStoreId = e.target.value;
+  }
   if (e.target.id === "image") {
     const file = e.target.files[0];
     if (!file) return;
@@ -560,6 +844,11 @@ document.addEventListener("change", (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  if (fulfillmentModal && !busy) {
+    fulfillmentModal = null;
+    render();
+    return;
+  }
   if (modal && !busy) {
     modal = null;
     render();
@@ -585,6 +874,29 @@ document.addEventListener("click", async (e) => {
     if (busy) return;
     modal = el.dataset.product;
     syncText = "";
+    render();
+    return;
+  }
+  if (el.dataset.fulfillment) {
+    if (busy) return;
+    fulfillmentModal = el.dataset.fulfillment;
+    fulfillmentFeedback = "";
+    render();
+    return;
+  }
+  if (el.dataset.dispatch) {
+    if (busy) return;
+    busy = true;
+    render();
+    await pause(600);
+    try {
+      dispatchFulfillment(state, el.dataset.dispatch);
+      save();
+      toast("Pedido despachado. Saiu para entrega.");
+    } catch (err) {
+      toast(err.message);
+    }
+    busy = false;
     render();
     return;
   }
@@ -636,6 +948,7 @@ document.addEventListener("click", async (e) => {
       name: "Nike Revolution 8",
       brand: "Nike",
       sku: "NK-RV8-" + String(state.products.length + 1).padStart(3, "0"),
+      barcode: "7891234509999",
       category: "Calçados",
       price: 399.9,
       stock: 18,
@@ -741,6 +1054,69 @@ document.addEventListener("click", async (e) => {
     render();
     toast("Título Shopee otimizado. Problema resolvido.");
   }
+  if (a === "new-order" && !busy) {
+    const opts = ["ml", "sh", "tk", "mg"].filter((id) =>
+      state.connected.includes(id),
+    );
+    const pick = (opts.length ? opts : ["ml"])[
+      state.fulfillments.length % (opts.length || 1)
+    ];
+    try {
+      const f = newFulfillment(state, pick);
+      save();
+      toast("Novo pedido " + f.id + " aguardando separação.");
+    } catch (err) {
+      toast(err.message);
+    }
+    render();
+  }
+  if (a === "scan-mode-saida" && !busy) {
+    scanMode = "saida";
+    scanFeedback = null;
+    render();
+  }
+  if (a === "scan-mode-entrada" && !busy) {
+    scanMode = "entrada";
+    scanFeedback = null;
+    render();
+  }
+  if (a === "close-fulfillment" && !busy) {
+    fulfillmentModal = null;
+    render();
+  }
+  if (a === "confirm-separation" && !busy && fulfillmentModal) {
+    busy = true;
+    render();
+    await pause(500);
+    try {
+      confirmSeparation(state, fulfillmentModal);
+      save();
+      toast("Pedido separado. Pronto para etiqueta.");
+    } catch (err) {
+      fulfillmentFeedback = err.message;
+    }
+    busy = false;
+    render();
+  }
+  if (a === "dispatch-from-modal" && !busy && fulfillmentModal) {
+    busy = true;
+    render();
+    await pause(500);
+    try {
+      dispatchFulfillment(state, fulfillmentModal);
+      save();
+      toast("Pedido despachado. Saiu para entrega.");
+      fulfillmentModal = null;
+    } catch (err) {
+      fulfillmentFeedback = err.message;
+    }
+    busy = false;
+    render();
+  }
+  if (a === "toggle-store-form" && !busy) {
+    storeFormOpen = !storeFormOpen;
+    render();
+  }
   if (a === "reset" && !busy) $("#reset-dialog").showModal();
   if (a === "cancel-reset") $("#reset-dialog").close();
   if (a === "confirm-reset") {
@@ -753,6 +1129,12 @@ document.addEventListener("click", async (e) => {
     query = "";
     modal = null;
     syncText = "";
+    scanMode = "saida";
+    scanStoreId = "st1";
+    scanFeedback = null;
+    fulfillmentModal = null;
+    fulfillmentFeedback = "";
+    storeFormOpen = false;
     save();
     go("dashboard");
     render();
@@ -760,9 +1142,10 @@ document.addEventListener("click", async (e) => {
   }
 });
 document.addEventListener("keydown", (e) => {
-  if (!modal) return;
+  if (!modal && !fulfillmentModal) return;
   if (e.key === "Escape" && !busy) {
     modal = null;
+    fulfillmentModal = null;
     render();
   }
   if (e.key === "Tab") {

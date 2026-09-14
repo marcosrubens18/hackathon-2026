@@ -9,6 +9,13 @@
     { id: "mg", name: "Magalu", short: "M", color: "#4b9cdd" },
     { id: "lp", name: "Loja própria", short: "N", color: "#b4cfbd" },
   ];
+  // Fulfillment (separation) status labels
+  const fulfillmentStatus = {
+    pending: "Aguardando separação",
+    separating: "Em separação",
+    separated: "Separado · pronto para etiqueta",
+    shipped: "Saiu para entrega",
+  };
   // Initial demonstration data
   function seed() {
     const items = [
@@ -112,6 +119,8 @@
       brand: p[4],
       category: p[5],
       icon: p[6],
+      // Código de barras (EAN-13 demonstrativo) usado pelo leitor IoT
+      barcode: "789123450" + String(i + 1).padStart(4, "0"),
       description:
         i === 0
           ? "Tênis masculino para corrida. Conforto e leveza para acompanhar seu ritmo."
@@ -149,6 +158,73 @@
       ],
       salesWeek: [2350, 3180, 2780, 3920, 3540, 4200],
       shareBase: { ml: 10424.4, sh: 7694.2, tk: 4219.4, lp: 2482 },
+      // Dados da empresa (painel de configurações)
+      company: {
+        name: "WedTech Comércio de Produtos Ltda",
+        cnpj: "48.123.456/0001-09",
+        ie: "148.256.987.114",
+      },
+      // Lojas e centros de distribuição cadastrados
+      stores: [
+        {
+          id: "st1",
+          name: "Loja Tatuapé",
+          type: "loja",
+          cnpj: "48.123.456/0001-09",
+          address: "Rua Serra de Bragança, 1000 — Tatuapé, São Paulo/SP",
+          active: true,
+        },
+        {
+          id: "st2",
+          name: "CD Guarulhos",
+          type: "cd",
+          cnpj: "48.123.456/0002-80",
+          address: "Rod. Hélio Smidt, 500 — Cumbica, Guarulhos/SP",
+          active: true,
+        },
+      ],
+      // Registro de leituras do leitor IoT (entrada, saída e separação)
+      scanLog: [],
+      // Pedidos de marketplace aguardando separação/expedição no estoque físico
+      fulfillments: [
+        {
+          id: "SEP-2201",
+          channel: "ml",
+          createdAt: "Hoje, 09:10",
+          status: "pending",
+          items: [
+            {
+              productId: "p2",
+              sku: "MS-G500-003",
+              name: "Mouse Gamer G500",
+              qty: 2,
+              scanned: false,
+            },
+            {
+              productId: "p6",
+              sku: "TC-K68-007",
+              name: "Teclado Mecânico K68",
+              qty: 1,
+              scanned: false,
+            },
+          ],
+        },
+        {
+          id: "SEP-2202",
+          channel: "sh",
+          createdAt: "Hoje, 10:35",
+          status: "pending",
+          items: [
+            {
+              productId: "p3",
+              sku: "HS-X200-004",
+              name: "Headset Gamer X200",
+              qty: 1,
+              scanned: false,
+            },
+          ],
+        },
+      ],
     };
   }
   // Derived operational metrics
@@ -165,6 +241,9 @@
         s.products.filter((p) => p.issue).length +
         s.products.filter((p) => p.slow).length +
         2,
+      pendingSeparations: s.fulfillments.filter(
+        (f) => f.status === "pending" || f.status === "separating",
+      ).length,
     };
   }
   // State mutations used by the demonstration
@@ -197,6 +276,7 @@
       id: "p" + Date.now(),
       price: Number(draft.price),
       stock: Number(draft.stock),
+      barcode: draft.barcode || "",
       channels: [...selected],
       icon: "box",
       issue: false,
@@ -209,6 +289,225 @@
       time: "Agora",
     });
     return p;
+  }
+  // Encontra um produto pelo SKU ou pelo código de barras (leitura do leitor IoT)
+  function findByCode(s, code) {
+    const c = String(code || "")
+      .trim()
+      .toLowerCase();
+    if (!c) throw Error("Informe um código de barras ou SKU.");
+    const p = s.products.find(
+      (p) =>
+        p.sku.toLowerCase() === c || (p.barcode || "").toLowerCase() === c,
+    );
+    if (!p) throw Error("Código não reconhecido no catálogo.");
+    return p;
+  }
+  // Leitura de SAÍDA na loja física: bipar = venda imediata e baixa de estoque
+  function scanSale(s, code, storeId) {
+    const p = findByCode(s, code);
+    if (p.stock < 1) throw Error(p.name + " está sem estoque disponível.");
+    const store =
+      s.stores.find((st) => st.id === storeId) || s.stores[0] || null;
+    p.stock--;
+    const o = {
+      id: "WT-" + (1040 + s.orders.length),
+      productId: p.id,
+      channel: "lp",
+      quantity: 1,
+      amount: p.price,
+      time: "Agora",
+    };
+    s.orders.push(o);
+    s.shareBase.lp = (s.shareBase.lp || 0) + p.price;
+    s.scanLog.unshift({
+      id: "SC-" + (s.scanLog.length + 1),
+      type: "saida",
+      sku: p.sku,
+      product: p.name,
+      store: store ? store.name : "Loja",
+      time: "Agora",
+    });
+    s.history.unshift({
+      text:
+        "Leitor IoT: venda de " +
+        p.name +
+        (store ? " na " + store.name : "") +
+        " • estoque sincronizado: " +
+        p.stock,
+      time: "Agora",
+    });
+    return { product: p, order: o };
+  }
+  // Leitura de ENTRADA na loja física: bipar = soma ao estoque (recebimento/reposição)
+  function scanReceive(s, code, qty, storeId) {
+    const p = findByCode(s, code);
+    const n = Math.max(1, Math.min(9999, Math.round(Number(qty) || 1)));
+    const store =
+      s.stores.find((st) => st.id === storeId) || s.stores[0] || null;
+    p.stock += n;
+    s.scanLog.unshift({
+      id: "SC-" + (s.scanLog.length + 1),
+      type: "entrada",
+      sku: p.sku,
+      product: p.name,
+      store: store ? store.name : "Loja",
+      time: "Agora",
+    });
+    s.history.unshift({
+      text:
+        "Leitor IoT: entrada de " +
+        n +
+        " un. de " +
+        p.name +
+        (store ? " na " + store.name : ""),
+      time: "Agora",
+    });
+    return p;
+  }
+  // Gera um novo pedido de marketplace aguardando separação (simulação de entrada de venda)
+  function newFulfillment(s, channel) {
+    const c = channels.find((c) => c.id === channel) || channels[0];
+    const pool = s.products.filter((p) => p.stock > 0);
+    if (!pool.length)
+      throw Error("Nenhum produto com estoque disponível para gerar pedido.");
+    const idx = s.fulfillments.length % pool.length;
+    const first = pool[idx];
+    const items = [
+      {
+        productId: first.id,
+        sku: first.sku,
+        name: first.name,
+        qty: 1,
+        scanned: false,
+      },
+    ];
+    if (pool.length > 1) {
+      const second = pool[(idx + 3) % pool.length];
+      if (second.id !== first.id)
+        items.push({
+          productId: second.id,
+          sku: second.sku,
+          name: second.name,
+          qty: 1,
+          scanned: false,
+        });
+    }
+    const f = {
+      id: "SEP-" + (2200 + s.fulfillments.length + 1),
+      channel: c.id,
+      createdAt: "Agora",
+      status: "pending",
+      items,
+    };
+    s.fulfillments.unshift(f);
+    s.history.unshift({
+      text: "Novo pedido do " + c.name + " aguardando separação (" + f.id + ")",
+      time: "Agora",
+    });
+    return f;
+  }
+  // Bipagem de um item durante a separação de um pedido: confere se o código pertence ao pedido
+  function scanFulfillmentItem(s, fulfillmentId, code) {
+    const f = s.fulfillments.find((f) => f.id === fulfillmentId);
+    if (!f) throw Error("Pedido não encontrado.");
+    if (f.status === "separated" || f.status === "shipped")
+      throw Error("Este pedido já foi separado.");
+    const c = String(code || "")
+      .trim()
+      .toLowerCase();
+    if (!c) throw Error("Informe um código de barras ou SKU.");
+    const product = s.products.find(
+      (p) =>
+        p.sku.toLowerCase() === c || (p.barcode || "").toLowerCase() === c,
+    );
+    const item = f.items.find(
+      (it) =>
+        !it.scanned &&
+        (it.sku.toLowerCase() === c ||
+          (product && it.productId === product.id)),
+    );
+    if (!item)
+      throw Error(
+        "Este código não pertence a este pedido ou o item já foi separado.",
+      );
+    f.status = "separating";
+    item.scanned = true;
+    s.scanLog.unshift({
+      id: "SC-" + (s.scanLog.length + 1),
+      type: "separacao",
+      sku: item.sku,
+      product: item.name,
+      store: "Separação " + f.id,
+      time: "Agora",
+    });
+    return f;
+  }
+  // Confirma a separação: baixa o estoque de cada item e libera o pedido para etiqueta
+  function confirmSeparation(s, fulfillmentId) {
+    const f = s.fulfillments.find((f) => f.id === fulfillmentId);
+    if (!f) throw Error("Pedido não encontrado.");
+    if (f.items.some((it) => !it.scanned))
+      throw Error("Bipe todos os itens antes de confirmar a separação.");
+    for (const it of f.items) {
+      const p = s.products.find((p) => p.id === it.productId);
+      if (p && p.stock < it.qty)
+        throw Error("Estoque insuficiente para " + p.name + ".");
+    }
+    for (const it of f.items) {
+      const p = s.products.find((p) => p.id === it.productId);
+      if (!p) continue;
+      p.stock -= it.qty;
+      s.orders.push({
+        id: "WT-" + (1040 + s.orders.length),
+        productId: p.id,
+        channel: f.channel,
+        quantity: it.qty,
+        amount: Math.round(p.price * it.qty * 100) / 100,
+        time: "Agora",
+      });
+    }
+    f.status = "separated";
+    s.history.unshift({
+      text: "Pedido " + f.id + " separado e pronto para etiqueta",
+      time: "Agora",
+    });
+    return f;
+  }
+  // Despacha um pedido já separado
+  function dispatchFulfillment(s, fulfillmentId) {
+    const f = s.fulfillments.find((f) => f.id === fulfillmentId);
+    if (!f) throw Error("Pedido não encontrado.");
+    if (f.status !== "separated")
+      throw Error("Separe todos os itens do pedido antes de despachar.");
+    f.status = "shipped";
+    s.history.unshift({
+      text: "Pedido " + f.id + " saiu para entrega",
+      time: "Agora",
+    });
+    return f;
+  }
+  // Cadastra uma nova loja/centro de distribuição (painel de configurações)
+  function addStore(s, draft) {
+    const name = (draft.name || "").trim(),
+      cnpj = (draft.cnpj || "").trim();
+    if (!name || !cnpj) throw Error("Informe nome e CNPJ da loja.");
+    if (s.stores.some((st) => st.cnpj === cnpj))
+      throw Error("Já existe uma loja cadastrada com este CNPJ.");
+    const store = {
+      id: "st" + (s.stores.length + 1) + "-" + Date.now(),
+      name,
+      type: draft.type === "cd" ? "cd" : "loja",
+      cnpj,
+      address: (draft.address || "").trim(),
+      active: true,
+    };
+    s.stores.push(store);
+    s.history.unshift({
+      text: "Nova loja cadastrada nas configurações: " + store.name,
+      time: "Agora",
+    });
+    return store;
   }
   // Local WedTech AI response engine
   function answer(s, q) {
@@ -237,6 +536,25 @@
             )
             .join("\n")
         : "Nenhum erro pendente nos anúncios do catálogo.";
+    if (/separa|expedi|despach/.test(q)) {
+      const open = s.fulfillments.filter((f) => f.status !== "shipped");
+      return open.length
+        ? "Você tem " +
+            open.length +
+            " pedido(s) aguardando separação ou despacho:\n\n" +
+            open
+              .map(
+                (f) =>
+                  f.id +
+                  " — " +
+                  f.items.length +
+                  " item(ns) — " +
+                  fulfillmentStatus[f.status],
+              )
+              .join("\n") +
+            "\n\nAbra o Estoque Inteligente para bipar os itens e liberar o despacho."
+        : "Nenhum pedido pendente de separação no momento.";
+    }
     if (/mais|giro|vendendo/.test(q)) {
       const ranked = s.products
         .map((p) => ({
@@ -286,14 +604,32 @@
         m.connected +
         " marketplaces conectados.\n\nIdentifiquei " +
         low.length +
-        " produtos com estoque baixo e " +
+        " produtos com estoque baixo, " +
         issues.length +
-        " anúncio(s) que precisam de correção."
+        " anúncio(s) que precisam de correção e " +
+        m.pendingSeparations +
+        " pedido(s) aguardando separação."
       );
-    return "Nesta demonstração, consigo analisar estoque, produtos que precisam de atenção, vendas e erros nos anúncios. Escolha uma sugestão ou peça: “Resuma minha operação.”";
+    return "Nesta demonstração, consigo analisar estoque, produtos que precisam de atenção, vendas, erros nos anúncios e pedidos aguardando separação. Escolha uma sugestão ou peça: “Resuma minha operação.”";
   }
   // Public API for the interface and automated tests
-  const api = { seed, metrics, sell, publish, answer, channels };
+  const api = {
+    seed,
+    metrics,
+    sell,
+    publish,
+    answer,
+    channels,
+    fulfillmentStatus,
+    findByCode,
+    scanSale,
+    scanReceive,
+    newFulfillment,
+    scanFulfillmentItem,
+    confirmSeparation,
+    dispatchFulfillment,
+    addStore,
+  };
   if (typeof module !== "undefined") module.exports = api;
   global.WedTech = api;
 })(typeof window !== "undefined" ? window : globalThis);

@@ -12,6 +12,7 @@ test("dados iniciais e soma única do estoque", () => {
     stock: 842,
     connected: 3,
     alerts: 6,
+    pendingSeparations: 2,
   });
   assert.equal(s.orders.filter((o) => o.channel === "ml").length, 18);
   assert.equal(s.orders.filter((o) => o.channel === "sh").length, 11);
@@ -58,7 +59,7 @@ test("persistência serializa todos os dados e reset é independente", () => {
   assert.equal(JSON.parse(JSON.stringify(s)).products[0].stock, 17);
   assert.equal(N.seed().products[0].stock, 18);
 });
-test("cinco áreas e etapas de anúncio renderizam sem erro", () => {
+test("sete áreas, separação de pedido e etapas de anúncio renderizam sem erro", () => {
   const app = { innerHTML: "" };
   const doc = {
     querySelector: (s) => (s === "#app" ? app : null),
@@ -83,20 +84,97 @@ test("cinco áreas e etapas de anúncio renderizam sem erro", () => {
   };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync("dist/app.js", "utf8"), context);
-  for (const route of ["dashboard", "produtos", "one", "marketplaces", "ai"]) {
+  for (const route of [
+    "dashboard",
+    "produtos",
+    "one",
+    "estoque",
+    "marketplaces",
+    "ai",
+    "config",
+  ]) {
     vm.runInContext(`page='${route}';render()`, context);
     assert.ok(app.innerHTML.includes("WedTech"));
     assert.ok(!app.innerHTML.includes("undefined"));
   }
+  assert.ok(app.innerHTML.includes("Estoque Inteligente"));
   vm.runInContext("modal='p0';render()", context);
   assert.ok(app.innerHTML.includes("18"));
+  vm.runInContext("modal=null;fulfillmentModal='SEP-2201';render()", context);
+  assert.ok(app.innerHTML.includes("SEP-2201"));
+  assert.ok(app.innerHTML.includes("Bipar código do item"));
+  vm.runInContext("fulfillmentModal=null;render()", context);
   vm.runInContext(
-    "modal=null;page='one';draft={name:'Teste',description:'Descrição',price:100};selected=['ml'];ads=[{channel:'ml',title:'Teste',description:'Descrição',warning:'GTIN não informado.',fixed:false}];oneStage=2;render()",
+    "page='one';draft={name:'Teste',description:'Descrição',price:100};selected=['ml'];ads=[{channel:'ml',title:'Teste',description:'Descrição',warning:'GTIN não informado.',fixed:false}];oneStage=2;render()",
     context,
   );
   assert.ok(app.innerHTML.includes("Corrigir com WedTech AI"));
   vm.runInContext("ads[0].fixed=true;oneStage=3;render()", context);
   assert.ok(app.innerHTML.includes('data-action="publish"'));
+});
+test("leitor IoT: saída dá baixa por SKU, entrada soma por código de barras", () => {
+  const s = N.seed();
+  const { product, order } = N.scanSale(s, "NK-RV8-001", "st1");
+  assert.equal(product.id, "p0");
+  assert.equal(product.stock, 17);
+  assert.equal(order.channel, "lp");
+  assert.equal(s.scanLog[0].type, "saida");
+  assert.equal(s.scanLog[0].store, "Loja Tatuapé");
+  const receive = N.scanReceive(s, "7891234500002", 5, "st1");
+  assert.equal(receive.id, "p1");
+  assert.equal(receive.stock, 70);
+  assert.equal(s.scanLog[0].type, "entrada");
+  assert.throws(() => N.scanSale(s, "CODIGO-INEXISTENTE"), /não reconhecido/);
+  assert.throws(() => N.scanSale(s, ""), /Informe um código/);
+});
+test("separação de pedido: bipagem confere itens, baixa estoque e libera despacho", () => {
+  const s = N.seed();
+  const f = s.fulfillments[0];
+  assert.throws(() => N.confirmSeparation(s, f.id), /Bipe todos os itens/);
+  assert.throws(
+    () => N.scanFulfillmentItem(s, f.id, "CODIGO-ERRADO"),
+    /não pertence/,
+  );
+  N.scanFulfillmentItem(s, f.id, "MS-G500-003");
+  assert.equal(f.items[0].scanned, true);
+  assert.equal(f.status, "separating");
+  N.scanFulfillmentItem(s, f.id, "7891234500007");
+  assert.equal(f.items[1].scanned, true);
+  const before2 = s.products.find((p) => p.id === "p2").stock;
+  const before6 = s.products.find((p) => p.id === "p6").stock;
+  const ordersBefore = s.orders.length;
+  N.confirmSeparation(s, f.id);
+  assert.equal(f.status, "separated");
+  assert.equal(s.products.find((p) => p.id === "p2").stock, before2 - 2);
+  assert.equal(s.products.find((p) => p.id === "p6").stock, before6 - 1);
+  assert.equal(s.orders.length, ordersBefore + 2);
+  assert.equal(N.metrics(s).pendingSeparations, 1);
+  N.dispatchFulfillment(s, f.id);
+  assert.equal(f.status, "shipped");
+  assert.throws(() => N.dispatchFulfillment(s, f.id), /Separe/);
+});
+test("novo pedido entra na fila e cadastro de loja valida nome e CNPJ", () => {
+  const s = N.seed();
+  const before = s.fulfillments.length;
+  const f = N.newFulfillment(s, "ml");
+  assert.equal(s.fulfillments.length, before + 1);
+  assert.equal(s.fulfillments[0].id, f.id);
+  assert.equal(f.status, "pending");
+  assert.ok(f.items.length >= 1);
+  assert.equal(N.metrics(s).pendingSeparations, 3);
+  const store = N.addStore(s, {
+    name: "Loja Teste",
+    cnpj: "11.111.111/0001-11",
+    address: "Rua X",
+    type: "loja",
+  });
+  assert.equal(s.stores.length, 3);
+  assert.equal(store.active, true);
+  assert.throws(
+    () => N.addStore(s, { name: "Outra", cnpj: "11.111.111/0001-11" }),
+    /CNPJ/,
+  );
+  assert.throws(() => N.addStore(s, { name: "", cnpj: "" }), /nome e CNPJ/i);
 });
 test("dashboard destaca o WedTech AI e oferece navegação acessível", () => {
   const app = { innerHTML: "" };
